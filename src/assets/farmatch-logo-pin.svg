@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="540" height="150" viewBox="0 0 540 150" fill="none" role="img" aria-label="Farmatch - Tu farmacia, en el mapa">
+  
+  <g>
+    <path d="M30 121 L90 121 L105 149 L15 149 Z" fill="#d7e6fb"></path>
+    <path d="M53 121 L46 149" stroke="#ffffff" stroke-width="3" stroke-linecap="round"></path>
+    <path d="M73 121 L82 149" stroke="#ffffff" stroke-width="3" stroke-linecap="round"></path>
+    <path d="M22 136 L98 136" stroke="#ffffff" stroke-width="3" stroke-linecap="round"></path>
+    <clipPath id="fmPinLogo"><path d="M60 124 C46 99 18 81 18 50 A42 36 0 1 1 102 50 C102 81 74 99 60 124 Z"></path></clipPath>
+    <g clip-path="url(#fmPinLogo)">
+      <rect x="0" y="0" width="120" height="50" fill="#7fb0fb"></rect>
+      <rect x="0" y="50" width="120" height="120" fill="#1e3a5f"></rect>
+      <rect x="0" y="48.4" width="120" height="3.2" fill="#ffffff"></rect>
+    </g>
+  </g>
+  
+  <text x="146" y="86" font-family="&#39;Plus Jakarta Sans&#39;, system-ui, -apple-system, &#39;Segoe UI&#39;, sans-serif" font-size="58" font-weight="800" letter-spacing="-1.6" fill="#1e3a5f">FARMATCH</text>
+  <text x="149" y="115" font-family="&#39;Plus Jakarta Sans&#39;, system-ui, -apple-system, &#39;Segoe UI&#39;, sans-serif" font-size="19" font-weight="500" letter-spacing="0.1" fill="#6b7280">Tu farmacia, en el mapa.</text>
+</svg>
