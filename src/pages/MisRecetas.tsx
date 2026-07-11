@@ -133,7 +133,7 @@ export default function MisRecetas() {
                             <section className="space-y-3">
                                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">Activas</h2>
                                 {activas.map((receta) => (
-                                    <RecetaCard key={receta.id_receta} receta={receta} index={recetas.indexOf(receta) + 1} medico={getMedico(receta.id_medico)} items={getItems(receta.id_receta)} getMedicamento={getMedicamento} expandida={expandidas.has(receta.id_receta)} qrVisible={qrVisible.has(receta.id_receta)} onToggle={() => toggleExpandida(receta.id_receta)} onToggleQr={(e) => toggleQr(receta.id_receta, e)} />
+                                    <RecetaCard key={receta.id_receta} receta={receta} medico={getMedico(receta.id_medico)} items={getItems(receta.id_receta)} getMedicamento={getMedicamento} expandida={expandidas.has(receta.id_receta)} qrVisible={qrVisible.has(receta.id_receta)} onToggle={() => toggleExpandida(receta.id_receta)} onToggleQr={(e) => toggleQr(receta.id_receta, e)} />
                                 ))}
                             </section>
                         )}
@@ -141,7 +141,7 @@ export default function MisRecetas() {
                             <section className="space-y-3">
                                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">Completadas</h2>
                                 {completadas.map((receta) => (
-                                    <RecetaCard key={receta.id_receta} receta={receta} index={recetas.indexOf(receta) + 1} medico={getMedico(receta.id_medico)} items={getItems(receta.id_receta)} getMedicamento={getMedicamento} expandida={expandidas.has(receta.id_receta)} qrVisible={qrVisible.has(receta.id_receta)} onToggle={() => toggleExpandida(receta.id_receta)} onToggleQr={(e) => toggleQr(receta.id_receta, e)} />
+                                    <RecetaCard key={receta.id_receta} receta={receta} medico={getMedico(receta.id_medico)} items={getItems(receta.id_receta)} getMedicamento={getMedicamento} expandida={expandidas.has(receta.id_receta)} qrVisible={qrVisible.has(receta.id_receta)} onToggle={() => toggleExpandida(receta.id_receta)} onToggleQr={(e) => toggleQr(receta.id_receta, e)} />
                                 ))}
                             </section>
                         )}
@@ -149,7 +149,7 @@ export default function MisRecetas() {
                             <section className="space-y-3">
                                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">Vencidas</h2>
                                 {vencidas.map((receta) => (
-                                    <RecetaCard key={receta.id_receta} receta={receta} index={recetas.indexOf(receta) + 1} medico={getMedico(receta.id_medico)} items={getItems(receta.id_receta)} getMedicamento={getMedicamento} expandida={expandidas.has(receta.id_receta)} qrVisible={qrVisible.has(receta.id_receta)} onToggle={() => toggleExpandida(receta.id_receta)} onToggleQr={(e) => toggleQr(receta.id_receta, e)} />
+                                    <RecetaCard key={receta.id_receta} receta={receta} medico={getMedico(receta.id_medico)} items={getItems(receta.id_receta)} getMedicamento={getMedicamento} expandida={expandidas.has(receta.id_receta)} qrVisible={qrVisible.has(receta.id_receta)} onToggle={() => toggleExpandida(receta.id_receta)} onToggleQr={(e) => toggleQr(receta.id_receta, e)} />
                                 ))}
                             </section>
                         )}
@@ -160,8 +160,8 @@ export default function MisRecetas() {
     );
 }
 
-function RecetaCard({ receta, index, medico, items, getMedicamento, expandida, qrVisible, onToggle, onToggleQr }: {
-    receta: Receta; index: number; medico: Medico | undefined; items: RecetaItem[];
+function RecetaCard({ receta, medico, items, getMedicamento, expandida, qrVisible, onToggle, onToggleQr }: {
+    receta: Receta; medico: Medico | undefined; items: RecetaItem[];
     getMedicamento: (id: number) => Medicamento | undefined; expandida: boolean; qrVisible: boolean;
     onToggle: () => void; onToggleQr: (e: React.MouseEvent) => void;
 }) {
