@@ -47,7 +47,6 @@ export default function BuscarMedicamentos() {
     const [farmaciasEncontradas, setFarmaciasEncontradas] = useState<FarmaciaResult[]>([]);
     const [recetasSeleccionadas, setRecetasSeleccionadas] = useState<number[]>([]);
     const [medsSeleccionados, setMedsSeleccionados] = useState<number[]>([]);
-    const [recetaItemsSeleccionados, setRecetaItemsSeleccionados] = useState<number[]>([]);
     const [step, setStep] = useState<1 | 2 | 3>(1);
     const [loadingMeds, setLoadingMeds] = useState(false);
     const [loadingFarmacias, setLoadingFarmacias] = useState(false);
@@ -57,7 +56,6 @@ export default function BuscarMedicamentos() {
     const [reservaConfirmada, setReservaConfirmada] = useState(false);
     const [geoPos, setGeoPos] = useState<{ lat: number; lon: number } | null>(null);
     const [obraSocial, setObraSocial] = useState<string | null>(null);
-    const [coberturas, setCoberturas] = useState<Record<number, number>>({});
     const [reservasPorMedicamento, setReservasPorMedicamento] = useState<Record<number, ReservaActiva>>({});
 
     useEffect(() => {
@@ -89,7 +87,6 @@ export default function BuscarMedicamentos() {
         setLoadingMeds(true);
         const { data: items } = await supabase.from("receta_items").select("id_item, id_medicamento, cantidad").in("id_receta", recetasSeleccionadas).eq("entregado", false);
         if (!items || items.length === 0) { setLoadingMeds(false); return; }
-        setRecetaItemsSeleccionados(items.map((i: any) => i.id_item));
         const idsMeds = [...new Set(items.map((i: any) => i.id_medicamento))] as number[];
         const { data: meds } = await supabase.from("medicamentos").select("id_medicamento, nombre_generico, nombre_comercial").in("id_medicamento", idsMeds);
 
@@ -140,7 +137,6 @@ export default function BuscarMedicamentos() {
             const { data: coberturasData } = await supabase.from("coberturas").select("id_medicamento, porcentaje_cobertura").eq("obra_social", obraSocial).in("id_medicamento", medsSeleccionados);
             if (coberturasData) coberturasData.forEach((c: any) => { coberturaMap[c.id_medicamento] = c.porcentaje_cobertura; });
         }
-        setCoberturas(coberturaMap);
         const idsFarmacias = [...new Set(stockData.map((s: any) => s.id_farmacia))] as number[];
         const { data: farmacias } = await supabase.from("farmacias").select("id_farmacia, nombre, direccion, telefono, latitud, longitud").in("id_farmacia", idsFarmacias);
         if (!farmacias) { setLoadingFarmacias(false); return; }

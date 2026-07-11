@@ -5,7 +5,7 @@ import { supabase } from "../services/supabase";
 
 type Rol = "paciente" | "medico" | "farmacia";
 interface Mensaje { rol: "user" | "assistant"; contenido: string; }
-interface Props { rol: Rol; contexto?: string; idPaciente?: number; idMedico?: number; idFarmacia?: number; }
+interface Props { rol: Rol; contexto?: string; idPaciente?: number; idMedico?: number; idFarmacia?: number; onAccion?: () => void; }
 
 const advertencia = `Responde siempre en espanol. Se muy conciso y directo, maximo 2-3 oraciones por respuesta. Al final de cada respuesta agrega una linea corta recordando consultar con un profesional.`;
 
@@ -281,7 +281,7 @@ async function llamarCohere(mensajesAPI: any[], tools: any[]) {
     });
 }
 
-export default function ChatIA({ rol, contexto, idPaciente, idMedico, idFarmacia }: Props) {
+export default function ChatIA({ rol, contexto, idPaciente, idMedico, idFarmacia, onAccion }: Props) {
     const [abierto, setAbierto] = useState(false);
     const [mensajes, setMensajes] = useState<Mensaje[]>([{ rol: "assistant", contenido: mensajeInicial[rol] }]);
     const [input, setInput] = useState("");
@@ -323,16 +323,19 @@ export default function ChatIA({ rol, contexto, idPaciente, idMedico, idFarmacia
                 const toolCalls = data.message.tool_calls;
                 mensajesAPI.push({ role: "assistant", tool_calls: toolCalls, tool_plan: data.message.tool_plan ?? "" });
 
+                let algunExito = false;
                 for (const tc of toolCalls) {
                     let args: any = {};
                     try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
                     const resultado = await ejecutarHerramienta(tc.function.name, args, { idPaciente, idMedico, idFarmacia });
+                    if (resultado?.exito) algunExito = true;
                     mensajesAPI.push({
                         role: "tool",
                         tool_call_id: tc.id,
                         content: [{ type: "document", document: { data: JSON.stringify(resultado) } }],
                     });
                 }
+                if (algunExito && onAccion) onAccion();
 
                 response = await llamarCohere(mensajesAPI, tools);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
