@@ -40,6 +40,8 @@ export default function DashboardFarmacia() {
     const [reservasPorDia, setReservasPorDia] = useState<any[]>([]);
     const [estadosPie, setEstadosPie] = useState<any[]>([]);
     const [tiempoPromedio, setTiempoPromedio] = useState<number | null>(null);
+    const [totalComisiones, setTotalComisiones] = useState<number>(0);
+    const [totalFacturado, setTotalFacturado] = useState<number>(0);
     const [loadingStats, setLoadingStats] = useState(true);
     const [stock, setStock] = useState<any[]>([]);
     const [loadingStock, setLoadingStock] = useState(true);
@@ -126,6 +128,12 @@ export default function DashboardFarmacia() {
 
     async function cargarEstadisticas() {
         if (!idFarmacia) return;
+        const { data: entregadasData } = await supabase.from("reservas").select("id_reserva, comision").eq("id_farmacia", idFarmacia).eq("estado", "entregada");
+        if (entregadasData) {
+            const sumaComisiones = entregadasData.reduce((t, r) => t + (Number(r.comision) || 0), 0);
+            setTotalComisiones(sumaComisiones);
+            setTotalFacturado(sumaComisiones > 0 ? Math.round((sumaComisiones / 0.03) * 100) / 100 : 0);
+        }
         const { data: busquedasData } = await supabase.from("busquedas").select("id_medicamento").eq("id_farmacia", idFarmacia);
         if (busquedasData && busquedasData.length > 0) {
             const idsMeds = busquedasData.map((b) => b.id_medicamento).filter(Boolean);
@@ -178,13 +186,18 @@ export default function DashboardFarmacia() {
             if (reservaItems && reservaItems.length > 0) {
                 const idsItems = reservaItems.map((ri) => ri.id_item);
                 await supabase.from("receta_items").update({ entregado: true }).in("id_item", idsItems);
-                const { data: itemsData } = await supabase.from("receta_items").select("id_receta, entregado").in("id_item", idsItems);
+                const { data: itemsData } = await supabase.from("receta_items").select("id_receta, id_medicamento, entregado").in("id_item", idsItems);
                 if (itemsData) {
                     const idsRecetas = [...new Set(itemsData.map((i) => i.id_receta))];
                     for (const idReceta of idsRecetas) {
                         const { data: todosItems } = await supabase.from("receta_items").select("entregado").eq("id_receta", idReceta);
                         if (todosItems && todosItems.every((i) => i.entregado)) await supabase.from("recetas").update({ estado: "completada" }).eq("id_receta", idReceta);
                     }
+                    const idsMedsEntregados = itemsData.map((i) => i.id_medicamento);
+                    const { data: stockPrecios } = await supabase.from("stock").select("id_medicamento, precio").eq("id_farmacia", idFarmacia).in("id_medicamento", idsMedsEntregados);
+                    const totalPedido = (stockPrecios ?? []).reduce((t, s) => t + (s.precio || 0), 0);
+                    const comisionCalculada = Math.round(totalPedido * 0.03 * 100) / 100;
+                    await supabase.from("reservas").update({ comision: comisionCalculada }).eq("id_reserva", reserva.id_reserva);
                 }
             }
         }
@@ -352,6 +365,19 @@ export default function DashboardFarmacia() {
                                         </div>
                                     </div>
                                 )}
+                                {totalFacturado > 0 && (
+                                    <div className={`${card} p-6 flex items-center gap-6 border-l-4 border-blue-500`}>
+                                        <div>
+                                            <p className="text-3xl font-bold text-slate-800 dark:text-slate-100">${totalFacturado.toLocaleString("es-AR")}</p>
+                                            <p className="text-sm font-medium text-slate-700 dark:text-slate-200 mt-1">Facturado a traves de Farmatch</p>
+                                            <p className="text-xs text-slate-400">Pedidos entregados via la plataforma</p>
+                                        </div>
+                                        <div className="ml-auto text-right">
+                                            <p className="text-2xl font-bold text-blue-600">${totalComisiones.toLocaleString("es-AR")}</p>
+                                            <p className="text-xs text-slate-400">Comision Farmatch (3%)</p>
+                                        </div>
+                                    </div>
+                                )}
                                 <div className={`${card} p-6`}>
                                     <h2 className="mb-1 text-base font-bold text-slate-800 dark:text-slate-100">Reservas últimos 7 días</h2>
                                     <p className="mb-4 text-sm text-slate-400">Actividad de pedidos en tu farmacia</p>
@@ -489,7 +515,7 @@ export default function DashboardFarmacia() {
                     </div>
                 )}
             </main>
-            <ChatIA rol="farmacia" />
+            <ChatIA rol="farmacia" idFarmacia={idFarmacia ?? undefined} onAccion={() => { if (idFarmacia) cargarStock(); }} />
         </div>
     );
 }

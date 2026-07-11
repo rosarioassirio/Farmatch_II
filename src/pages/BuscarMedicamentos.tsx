@@ -1,18 +1,21 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Search, Pill, MapPin, Phone, Star, CheckCircle2, XCircle, ChevronDown, CheckCheck, Package } from "lucide-react";
+import { ArrowLeft, Search, Pill, MapPin, Phone, Star, CheckCircle2, XCircle, ChevronDown, CheckCheck, Package, Clock } from "lucide-react";
 
 interface Receta { id_receta: number; id_medico: number; estado: string; fecha_emision: string; }
 interface Medico { id_medico: number; nombre: string; apellido: string; }
 interface MedAgrupado { id_medicamento: number; nombre_generico: string; nombre_comercial: string | null; cantidad: number; id_items: number[]; }
-interface FarmaciaResult { id_farmacia: number; nombre: string; direccion: string; telefono: string; latitud: number; longitud: number; disponibles: number; total: number; precioTotal: number; medicamentosDisponibles: number[]; distanciaKm: number | null; }
+interface FarmaciaResult { id_farmacia: number; nombre: string; direccion: string; telefono: string; latitud: number; longitud: number; disponibles: number; total: number; precioTotal: number; precioConCobertura: number; medicamentosDisponibles: number[]; distanciaKm: number | null; }
+interface ReservaActiva { farmacia: string; estado: string; }
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371; const dLat = ((lat2 - lat1) * Math.PI) / 180; const dLon = ((lon2 - lon1) * Math.PI) / 180;
     const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+
+const ESTADO_LABEL: Record<string, string> = { pendiente: "Pendiente", preparando: "Preparando", lista: "Lista para retirar" };
 
 function Steps({ current }: { current: 1 | 2 | 3 }) {
     const steps = ["Recetas", "Medicamentos", "Farmacias"];
@@ -53,13 +56,17 @@ export default function BuscarMedicamentos() {
     const [confirmando, setConfirmando] = useState(false);
     const [reservaConfirmada, setReservaConfirmada] = useState(false);
     const [geoPos, setGeoPos] = useState<{ lat: number; lon: number } | null>(null);
+    const [obraSocial, setObraSocial] = useState<string | null>(null);
+    const [coberturas, setCoberturas] = useState<Record<number, number>>({});
+    const [reservasPorMedicamento, setReservasPorMedicamento] = useState<Record<number, ReservaActiva>>({});
 
     useEffect(() => {
         async function cargar() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
-            const { data: paciente } = await supabase.from("pacientes").select("id_paciente").eq("email", user.email).single();
+            const { data: paciente } = await supabase.from("pacientes").select("id_paciente, obra_social").eq("email", user.email).single();
             if (!paciente) return;
+            setObraSocial(paciente.obra_social);
             const [recetasRes, medicosRes] = await Promise.all([
                 supabase.from("recetas").select("id_receta, id_medico, estado, fecha_emision").eq("id_paciente", paciente.id_paciente).eq("estado", "activa"),
                 supabase.from("medicos").select("id_medico, nombre, apellido"),
@@ -85,6 +92,29 @@ export default function BuscarMedicamentos() {
         setRecetaItemsSeleccionados(items.map((i: any) => i.id_item));
         const idsMeds = [...new Set(items.map((i: any) => i.id_medicamento))] as number[];
         const { data: meds } = await supabase.from("medicamentos").select("id_medicamento, nombre_generico, nombre_comercial").in("id_medicamento", idsMeds);
+
+        // Buscar si alguno de estos items ya tiene una reserva activa (pendiente/preparando/lista)
+        const idsItems = items.map((i: any) => i.id_item);
+        const { data: reservaItemsData } = await supabase.from("reserva_items").select("id_item, id_reserva").in("id_item", idsItems);
+        const reservasMap: Record<number, ReservaActiva> = {};
+        if (reservaItemsData && reservaItemsData.length > 0) {
+            const idsReservas = [...new Set(reservaItemsData.map((ri: any) => ri.id_reserva))];
+            const { data: reservasData } = await supabase.from("reservas").select("id_reserva, id_farmacia, estado").in("id_reserva", idsReservas).in("estado", ["pendiente", "preparando", "lista"]);
+            if (reservasData && reservasData.length > 0) {
+                const idsFarmaciasRes = [...new Set(reservasData.map((r: any) => r.id_farmacia))];
+                const { data: farmaciasData } = await supabase.from("farmacias").select("id_farmacia, nombre").in("id_farmacia", idsFarmaciasRes);
+                reservaItemsData.forEach((ri: any) => {
+                    const reserva = reservasData.find((r: any) => r.id_reserva === ri.id_reserva);
+                    if (!reserva) return;
+                    const item = items.find((i: any) => i.id_item === ri.id_item);
+                    if (!item) return;
+                    const farmacia = farmaciasData?.find((f: any) => f.id_farmacia === reserva.id_farmacia);
+                    reservasMap[item.id_medicamento] = { farmacia: farmacia?.nombre ?? "una farmacia", estado: reserva.estado };
+                });
+            }
+        }
+        setReservasPorMedicamento(reservasMap);
+
         if (meds) {
             const map: Record<string, MedAgrupado> = {};
             meds.forEach((m: any) => {
@@ -93,7 +123,9 @@ export default function BuscarMedicamentos() {
                 else { map[m.nombre_generico].cantidad += relatedItems.reduce((s: number, i: any) => s + (i.cantidad || 1), 0); map[m.nombre_generico].id_items.push(...relatedItems.map((i: any) => i.id_item)); }
             });
             const agrupados = Object.values(map);
-            setMedsAgrupados(agrupados); setMedsSeleccionados(agrupados.map(m => m.id_medicamento));
+            setMedsAgrupados(agrupados);
+            // No preseleccionar los que ya tienen reserva activa
+            setMedsSeleccionados(agrupados.filter(m => !reservasMap[m.id_medicamento]).map(m => m.id_medicamento));
         }
         setLoadingMeds(false); setStep(2);
     }
@@ -103,6 +135,12 @@ export default function BuscarMedicamentos() {
         setLoadingFarmacias(true);
         const { data: stockData } = await supabase.from("stock").select("id_farmacia, id_medicamento, precio").in("id_medicamento", medsSeleccionados);
         if (!stockData) { setLoadingFarmacias(false); return; }
+        let coberturaMap: Record<number, number> = {};
+        if (obraSocial) {
+            const { data: coberturasData } = await supabase.from("coberturas").select("id_medicamento, porcentaje_cobertura").eq("obra_social", obraSocial).in("id_medicamento", medsSeleccionados);
+            if (coberturasData) coberturasData.forEach((c: any) => { coberturaMap[c.id_medicamento] = c.porcentaje_cobertura; });
+        }
+        setCoberturas(coberturaMap);
         const idsFarmacias = [...new Set(stockData.map((s: any) => s.id_farmacia))] as number[];
         const { data: farmacias } = await supabase.from("farmacias").select("id_farmacia, nombre, direccion, telefono, latitud, longitud").in("id_farmacia", idsFarmacias);
         if (!farmacias) { setLoadingFarmacias(false); return; }
@@ -110,9 +148,14 @@ export default function BuscarMedicamentos() {
             const stockFarmacia = stockData.filter((s: any) => s.id_farmacia === f.id_farmacia);
             const medicamentosDisponibles = stockFarmacia.map((s: any) => s.id_medicamento);
             const disponibles = medsSeleccionados.filter(id => medicamentosDisponibles.includes(id)).length;
-            const precioTotal = stockFarmacia.filter((s: any) => medsSeleccionados.includes(s.id_medicamento)).reduce((t: number, s: any) => t + (s.precio || 0), 0);
+            const itemsRelevantes = stockFarmacia.filter((s: any) => medsSeleccionados.includes(s.id_medicamento));
+            const precioTotal = itemsRelevantes.reduce((t: number, s: any) => t + (s.precio || 0), 0);
+            const precioConCobertura = itemsRelevantes.reduce((t: number, s: any) => {
+                const pct = coberturaMap[s.id_medicamento] ?? 0;
+                return t + (s.precio || 0) * (1 - pct / 100);
+            }, 0);
             const distanciaKm = geoPos ? haversineKm(geoPos.lat, geoPos.lon, f.latitud, f.longitud) : null;
-            return { ...f, disponibles, total: medsSeleccionados.length, medicamentosDisponibles, precioTotal, distanciaKm };
+            return { ...f, disponibles, total: medsSeleccionados.length, medicamentosDisponibles, precioTotal, precioConCobertura, distanciaKm };
         });
         resultado.sort((a, b) => { if (b.disponibles !== a.disponibles) return b.disponibles - a.disponibles; if (a.distanciaKm !== null && b.distanciaKm !== null) return a.distanciaKm - b.distanciaKm; return a.precioTotal - b.precioTotal; });
         setFarmaciasEncontradas(resultado); setLoadingFarmacias(false); setStep(3);
@@ -127,11 +170,12 @@ export default function BuscarMedicamentos() {
         if (!paciente) { setConfirmando(false); return; }
         const { data: reservaData, error } = await supabase.from("reservas").insert({ id_paciente: paciente.id_paciente, id_farmacia: farmaciaSeleccionada.id_farmacia, fecha: new Date().toISOString(), estado: "pendiente" }).select().single();
         if (error || !reservaData) { setConfirmando(false); return; }
-        if (recetaItemsSeleccionados.length > 0) await supabase.from("reserva_items").insert(recetaItemsSeleccionados.map(id_item => ({ id_reserva: reservaData.id_reserva, id_item })));
+        const itemsAReservar = medsAgrupados.filter(m => medsSeleccionados.includes(m.id_medicamento)).flatMap(m => m.id_items);
+        if (itemsAReservar.length > 0) await supabase.from("reserva_items").insert(itemsAReservar.map(id_item => ({ id_reserva: reservaData.id_reserva, id_item })));
         setConfirmando(false); setReservaConfirmada(true);
     }
 
-    function resetear() { setStep(1); setRecetasSeleccionadas([]); setMedsAgrupados([]); setMedsSeleccionados([]); setFarmaciasEncontradas([]); setFarmaciaSeleccionada(null); setReservaConfirmada(false); }
+    function resetear() { setStep(1); setRecetasSeleccionadas([]); setMedsAgrupados([]); setMedsSeleccionados([]); setFarmaciasEncontradas([]); setFarmaciaSeleccionada(null); setReservaConfirmada(false); setReservasPorMedicamento({}); }
     const getMedico = (id: number) => medicos.find(m => m.id_medico === id);
 
     const card = "rounded-2xl border shadow-sm";
@@ -146,7 +190,7 @@ export default function BuscarMedicamentos() {
                     </button>
                     <div>
                         <h1 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Buscar medicamentos</h1>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">{step === 1 ? "Seleccioná tus recetas activas" : step === 2 ? "Confirmá los medicamentos" : "Elegí una farmacia"}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{step === 1 ? "Selecciona tus recetas activas" : step === 2 ? "Confirma los medicamentos" : "Elegi una farmacia"}</p>
                     </div>
                 </div>
             </header>
@@ -160,11 +204,11 @@ export default function BuscarMedicamentos() {
                             <div className={`${cardBase} p-10 text-center`}>
                                 <Package size={36} className="text-slate-300 mx-auto mb-3" />
                                 <p className="font-medium text-slate-600 dark:text-slate-300">Sin recetas activas</p>
-                                <p className="text-sm text-slate-400 mt-1">Tu médico debe emitir una receta digital primero.</p>
+                                <p className="text-sm text-slate-400 mt-1">Tu medico debe emitir una receta digital primero.</p>
                             </div>
                         ) : (
                             <>
-                                <p className="text-xs text-slate-400 px-1">Seleccioná una o más recetas para buscar sus medicamentos.</p>
+                                <p className="text-xs text-slate-400 px-1">Selecciona una o mas recetas para buscar sus medicamentos.</p>
                                 <div className="space-y-2">
                                     {recetas.map((receta, i) => {
                                         const sel = recetasSeleccionadas.includes(receta.id_receta);
@@ -177,7 +221,7 @@ export default function BuscarMedicamentos() {
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm">Receta #{i + 1}</p>
-                                                    {med && <p className="text-xs text-slate-400 mt-0.5">Dr/a. {med.nombre} {med.apellido} · {fecha}</p>}
+                                                    {med && <p className="text-xs text-slate-400 mt-0.5">Dr/a. {med.nombre} {med.apellido} - {fecha}</p>}
                                                 </div>
                                                 {sel && <span className="text-xs font-medium text-blue-600 shrink-0">Seleccionada</span>}
                                             </button>
@@ -194,24 +238,33 @@ export default function BuscarMedicamentos() {
 
                 {step === 2 && (
                     <div className="space-y-4">
-                        <p className="text-xs text-slate-400 px-1">Estos son los medicamentos pendientes de entrega. Desmarcá los que no querés incluir.</p>
+                        <p className="text-xs text-slate-400 px-1">Estos son los medicamentos pendientes de entrega. Desmarca los que no queres incluir.</p>
                         <div className="space-y-2">
                             {medsAgrupados.map(med => {
                                 const sel = medsSeleccionados.includes(med.id_medicamento);
+                                const yaReservado = reservasPorMedicamento[med.id_medicamento];
                                 return (
-                                    <button key={med.id_medicamento} onClick={() => setMedsSeleccionados(prev => sel ? prev.filter(id => id !== med.id_medicamento) : [...prev, med.id_medicamento])} className={`w-full text-left rounded-2xl border px-4 py-3.5 flex items-center gap-3 transition-all ${sel ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 shadow-sm" : "border-slate-100 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm opacity-60"}`}>
-                                        <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${sel ? "bg-blue-600 border-blue-600" : "border-slate-300 dark:border-slate-500"}`}>
-                                            {sel && <CheckCheck size={11} className="text-white" />}
-                                        </div>
-                                        <div className={`p-1.5 rounded-lg shrink-0 ${sel ? "bg-blue-100 dark:bg-blue-900/30" : "bg-slate-100 dark:bg-slate-700"}`}>
-                                            <Pill size={14} className={sel ? "text-blue-600" : "text-slate-400"} />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm">{med.nombre_generico}</p>
-                                            {med.nombre_comercial && <p className="text-xs text-slate-400">{med.nombre_comercial}</p>}
-                                        </div>
-                                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full shrink-0 ${sel ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400" : "bg-slate-100 dark:bg-slate-700 text-slate-400"}`}>x{med.cantidad}</span>
-                                    </button>
+                                    <div key={med.id_medicamento}>
+                                        <button onClick={() => setMedsSeleccionados(prev => sel ? prev.filter(id => id !== med.id_medicamento) : [...prev, med.id_medicamento])} className={`w-full text-left rounded-2xl border px-4 py-3.5 flex items-center gap-3 transition-all ${sel ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 shadow-sm" : "border-slate-100 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm opacity-60"}`}>
+                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${sel ? "bg-blue-600 border-blue-600" : "border-slate-300 dark:border-slate-500"}`}>
+                                                {sel && <CheckCheck size={11} className="text-white" />}
+                                            </div>
+                                            <div className={`p-1.5 rounded-lg shrink-0 ${sel ? "bg-blue-100 dark:bg-blue-900/30" : "bg-slate-100 dark:bg-slate-700"}`}>
+                                                <Pill size={14} className={sel ? "text-blue-600" : "text-slate-400"} />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm">{med.nombre_generico}</p>
+                                                {med.nombre_comercial && <p className="text-xs text-slate-400">{med.nombre_comercial}</p>}
+                                            </div>
+                                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full shrink-0 ${sel ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400" : "bg-slate-100 dark:bg-slate-700 text-slate-400"}`}>x{med.cantidad}</span>
+                                        </button>
+                                        {yaReservado && (
+                                            <div className="mt-1.5 ml-2 flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-400 rounded-lg px-3 py-1.5">
+                                                <Clock size={12} />
+                                                <span>Ya reservado en <span className="font-medium">{yaReservado.farmacia}</span> ({ESTADO_LABEL[yaReservado.estado] ?? yaReservado.estado})</span>
+                                            </div>
+                                        )}
+                                    </div>
                                 );
                             })}
                         </div>
@@ -231,13 +284,13 @@ export default function BuscarMedicamentos() {
                             </div>
                         ) : (
                             <>
-                                <p className="text-xs text-slate-400 px-1">{farmaciasEncontradas.length} farmacia{farmaciasEncontradas.length !== 1 ? "s" : ""} encontrada{farmaciasEncontradas.length !== 1 ? "s" : ""} · ordenadas por disponibilidad{geoPos ? " y cercanía" : " y precio"}</p>
+                                <p className="text-xs text-slate-400 px-1">{farmaciasEncontradas.length} farmacia{farmaciasEncontradas.length !== 1 ? "s" : ""} encontrada{farmaciasEncontradas.length !== 1 ? "s" : ""} - ordenadas por disponibilidad{geoPos ? " y cercania" : " y precio"}</p>
                                 {farmaciasEncontradas.map((farmacia, index) => {
                                     const completa = farmacia.disponibles === farmacia.total;
                                     const abierta = farmaciaAbierta === farmacia.id_farmacia;
                                     return (
                                         <div key={farmacia.id_farmacia} className={`bg-white dark:bg-slate-800 rounded-2xl border shadow-sm overflow-hidden ${index === 0 ? "border-blue-200 dark:border-blue-700" : "border-slate-100 dark:border-slate-700"}`}>
-                                            {index === 0 && <div className="bg-blue-600 px-4 py-1.5 flex items-center gap-1.5"><Star size={11} className="text-blue-200 fill-blue-200" /><span className="text-xs font-semibold text-white">Mejor opción</span></div>}
+                                            {index === 0 && <div className="bg-blue-600 px-4 py-1.5 flex items-center gap-1.5"><Star size={11} className="text-blue-200 fill-blue-200" /><span className="text-xs font-semibold text-white">Mejor opcion</span></div>}
                                             <div className="px-4 pt-4 pb-3">
                                                 <div className="flex items-start justify-between gap-2">
                                                     <div className="flex-1 min-w-0">
@@ -247,8 +300,18 @@ export default function BuscarMedicamentos() {
                                                         {farmacia.telefono && <div className="flex items-center gap-1 text-xs text-slate-400 mt-0.5"><Phone size={11} />{farmacia.telefono}</div>}
                                                     </div>
                                                     <div className="text-right shrink-0">
-                                                        <p className="text-lg font-bold text-slate-800 dark:text-slate-100">${farmacia.precioTotal.toLocaleString("es-AR")}</p>
-                                                        <p className="text-xs text-slate-400">precio aprox.</p>
+                                                        {obraSocial && farmacia.precioConCobertura < farmacia.precioTotal ? (
+                                                            <>
+                                                                <p className="text-xs text-slate-400 line-through">${farmacia.precioTotal.toLocaleString("es-AR")}</p>
+                                                                <p className="text-lg font-bold text-green-600">${Math.round(farmacia.precioConCobertura).toLocaleString("es-AR")}</p>
+                                                                <p className="text-xs text-slate-400">con {obraSocial}</p>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <p className="text-lg font-bold text-slate-800 dark:text-slate-100">${farmacia.precioTotal.toLocaleString("es-AR")}</p>
+                                                                <p className="text-xs text-slate-400">precio aprox.</p>
+                                                            </>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <div className="mt-3 flex items-center justify-between">
@@ -301,13 +364,28 @@ export default function BuscarMedicamentos() {
                                             })}
                                         </div>
                                     </div>
-                                    <div className="flex items-center justify-between py-3 border-t border-b border-slate-100 dark:border-slate-700">
-                                        <span className="text-sm text-slate-500 dark:text-slate-400">Total aproximado</span>
-                                        <span className="text-xl font-bold text-slate-800 dark:text-slate-100">${farmaciaSeleccionada.precioTotal.toLocaleString("es-AR")}</span>
+                                    <div className="py-3 border-t border-b border-slate-100 dark:border-slate-700 space-y-1">
+                                        {obraSocial && farmaciaSeleccionada.precioConCobertura < farmaciaSeleccionada.precioTotal ? (
+                                            <>
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-sm text-slate-500 dark:text-slate-400">Precio de lista</span>
+                                                    <span className="text-sm text-slate-400 line-through">${farmaciaSeleccionada.precioTotal.toLocaleString("es-AR")}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-sm text-slate-500 dark:text-slate-400">Con cobertura {obraSocial}</span>
+                                                    <span className="text-xl font-bold text-green-600">${Math.round(farmaciaSeleccionada.precioConCobertura).toLocaleString("es-AR")}</span>
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-sm text-slate-500 dark:text-slate-400">Total aproximado</span>
+                                                <span className="text-xl font-bold text-slate-800 dark:text-slate-100">${farmaciaSeleccionada.precioTotal.toLocaleString("es-AR")}</span>
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="flex items-center gap-4">
                                         <img src={`https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=farmatch-reserva-${farmaciaSeleccionada.id_farmacia}&color=1e40af&bgcolor=eff6ff`} alt="QR" className="rounded-xl border border-blue-100" width={80} height={80} />
-                                        <p className="text-xs text-slate-400 leading-relaxed">Presentá este código al retirar tus medicamentos en la farmacia.</p>
+                                        <p className="text-xs text-slate-400 leading-relaxed">Presenta este codigo al retirar tus medicamentos en la farmacia.</p>
                                     </div>
                                     <div className="flex gap-3 pt-1">
                                         <button onClick={() => setFarmaciaSeleccionada(null)} className="flex-1 py-2.5 border border-slate-200 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Cancelar</button>
@@ -319,9 +397,9 @@ export default function BuscarMedicamentos() {
                             <div className="px-6 py-10 text-center">
                                 <div className="w-14 h-14 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle2 size={28} className="text-green-600" /></div>
                                 <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">Reserva confirmada</h3>
-                                <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">Tu pedido fue enviado a <span className="font-medium text-slate-700 dark:text-slate-200">{farmaciaSeleccionada.nombre}</span>. Podés seguir el estado en Mis reservas.</p>
+                                <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">Tu pedido fue enviado a <span className="font-medium text-slate-700 dark:text-slate-200">{farmaciaSeleccionada.nombre}</span>. Podes seguir el estado en Mis reservas.</p>
                                 <div className="flex gap-3 mt-6">
-                                    <button onClick={resetear} className="flex-1 py-2.5 border border-slate-200 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Nueva búsqueda</button>
+                                    <button onClick={resetear} className="flex-1 py-2.5 border border-slate-200 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Nueva busqueda</button>
                                     <button onClick={() => navigate("/mis-reservas")} className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700">Mis reservas</button>
                                 </div>
                             </div>

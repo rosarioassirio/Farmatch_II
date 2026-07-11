@@ -578,7 +578,7 @@ export default function DashboardMedico() {
                     </div>
                 )}
             </main>
-            <ChatIA rol="medico" />
+            <ChatIA rol="medico" idMedico={medicoId ?? undefined} />
         </div>
     );
 }

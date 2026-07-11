@@ -41,6 +41,7 @@ export default function DashboardPaciente() {
     const [reservaListaParaRetirar, setReservaListaParaRetirar] = useState<any | null>(null);
     const [ubicacion, setUbicacion] = useState<{ lat: number; lng: number } | null>(null);
     const [ubicacionError, setUbicacionError] = useState(false);
+    const [idPacienteActual, setIdPacienteActual] = useState<number | null>(null);
 
     async function cerrarSesion() {
         await supabase.auth.signOut();
@@ -73,6 +74,7 @@ export default function DashboardPaciente() {
             if (perfil) setNombre(perfil.nombre);
             const { data: paciente } = await supabase.from("pacientes").select("*").eq("email", user.email).single();
             if (!paciente) return;
+            setIdPacienteActual(paciente.id_paciente);
             const { data: recetasData } = await supabase.from("recetas").select("*")
                 .eq("id_paciente", paciente.id_paciente).eq("estado", "activa");
             if (recetasData) {
@@ -233,7 +235,7 @@ export default function DashboardPaciente() {
                     </div>
                 )}
             </main>
-            <ChatIA rol="paciente" />
+            <ChatIA rol="paciente" idPaciente={idPacienteActual ?? undefined} />
         </div>
     );
 }

@@ -1,42 +1,287 @@
 import { useState, useRef, useEffect } from "react";
 import { X, Send, User, Loader } from "lucide-react";
 import { FarmyIcon } from "./FarmyIcon";
+import { supabase } from "../services/supabase";
 
 type Rol = "paciente" | "medico" | "farmacia";
 interface Mensaje { rol: "user" | "assistant"; contenido: string; }
-interface Props { rol: Rol; contexto?: string; }
+interface Props { rol: Rol; contexto?: string; idPaciente?: number; idMedico?: number; idFarmacia?: number; }
+
+const advertencia = `Responde siempre en espanol. Se muy conciso y directo, maximo 2-3 oraciones por respuesta. Al final de cada respuesta agrega una linea corta recordando consultar con un profesional.`;
 
 const systemPrompt = (rol: Rol, contexto?: string): string => {
-    const advertencia = `Respondé siempre en español. Sé muy conciso y directo, máximo 2-3 oraciones por respuesta. Al final de cada respuesta agregá una línea corta recordando consultar con un profesional.`;
     const base: Record<Rol, string> = {
-        paciente: `Sos un asistente farmacológico de FARMATCH que ayuda a pacientes. Podés explicar para qué sirven los medicamentos, cómo tomarlos, efectos secundarios comunes, qué alimentos o actividades evitar, y responder dudas generales sobre salud y medicación. No diagnosticás enfermedades ni modificás indicaciones médicas.${contexto ? `\nContexto del paciente: ${contexto}` : ""}\n${advertencia}`,
-        medico: `Sos un asistente clínico de FARMATCH que ayuda a médicos. Podés responder sobre interacciones medicamentosas, dosis habituales, mecanismos de acción, contraindicaciones, equivalentes genéricos y comerciales, y guías clínicas. Usá lenguaje técnico apropiado para un profesional médico.${contexto ? `\nContexto: ${contexto}` : ""}\n${advertencia}`,
-        farmacia: `Sos un asistente de FARMATCH que ayuda al personal de farmacias. Podés responder sobre equivalentes genéricos y comerciales, conservación de medicamentos, presentaciones disponibles, cadena de frío, y dudas operativas sobre dispensación.${contexto ? `\nContexto: ${contexto}` : ""}\n${advertencia}`,
+        paciente: `Sos un asistente farmacologico de FARMATCH que ayuda a pacientes. Podes explicar para que sirven los medicamentos, como tomarlos, efectos secundarios comunes, que alimentos o actividades evitar, y responder dudas generales sobre salud y medicacion. Tambien podes crear reservas de medicamentos en una farmacia cuando el paciente te lo pida (usando la herramienta crear_reserva). No diagnosticas enfermedades ni modificas indicaciones medicas.${contexto ? `\nContexto del paciente: ${contexto}` : ""}\n${advertencia}`,
+        medico: `Sos un asistente clinico de FARMATCH que ayuda a medicos. Podes responder sobre interacciones medicamentosas, dosis habituales, mecanismos de accion, contraindicaciones, equivalentes genericos y comerciales, y guias clinicas. Usa lenguaje tecnico apropiado para un profesional medico.${contexto ? `\nContexto: ${contexto}` : ""}\n${advertencia}`,
+        farmacia: `Sos un asistente de FARMATCH que ayuda al personal de farmacias. Podes responder sobre equivalentes genericos y comerciales, conservacion de medicamentos, presentaciones disponibles, cadena de frio, y dudas operativas sobre dispensacion.${contexto ? `\nContexto: ${contexto}` : ""}\n${advertencia}`,
     };
     return base[rol];
 };
 
 const mensajeInicial: Record<Rol, string> = {
-    paciente: "Hola! Soy FARMY, tu asistente de salud de FARMATCH. Podés preguntarme para qué sirve un medicamento, cómo tomarlo, efectos secundarios o qué evitar mientras lo tomás. ¿En qué te puedo ayudar?",
-    medico: "Hola! Soy FARMY,tu asistente clínico de FARMATCH. Podés consultarme sobre interacciones medicamentosas, dosis, contraindicaciones, equivalentes genéricos o guías clínicas. ¿En qué te puedo ayudar?",
-    farmacia: "Hola! Soy FARMY, tu asistente farmacéutico de FARMATCH. Podés preguntarme sobre equivalentes genéricos y comerciales, conservación de medicamentos, presentaciones disponibles o dudas sobre dispensación. ¿En qué te puedo ayudar?",
+    paciente: "Hola! Soy FARMY, tu asistente de salud de FARMATCH. Puedo explicarte tus medicamentos o reservarte tus recetas pendientes en una farmacia. En que te puedo ayudar?",
+    medico: "Hola! Soy FARMY, tu asistente clinico de FARMATCH. Podes consultarme sobre interacciones medicamentosas, dosis, contraindicaciones, equivalentes genericos o guias clinicas. En que te puedo ayudar?",
+    farmacia: "Hola! Soy FARMY, tu asistente farmaceutico de FARMATCH. Podes preguntarme sobre equivalentes genericos y comerciales, conservacion de medicamentos, presentaciones disponibles o dudas sobre dispensacion. En que te puedo ayudar?",
 };
 
 const placeholder: Record<Rol, string> = {
-    paciente: "¿Para qué sirve este medicamento?",
-    medico: "¿Hay interacción entre ibuprofeno y aspirina?",
-    farmacia: "¿Cuál es el genérico de Atorvastatina?",
+    paciente: "Reservame mis medicamentos en Farmacia Gonnet",
+    medico: "Hay interaccion entre ibuprofeno y aspirina?",
+    farmacia: "Cual es el generico de Atorvastatina?",
 };
 
-const titulo: Record<Rol, string> = {
-    paciente: "FARMY",
-    medico: "FARMY",
-    farmacia: "FARMY",
-};
+const titulo: Record<Rol, string> = { paciente: "FARMY", medico: "FARMY", farmacia: "FARMY" };
 
 const COHERE_API_KEY = import.meta.env.VITE_COHERE_KEY;
 
-export default function ChatIA({ rol, contexto }: Props) {
+// ---------- Definicion de herramientas por rol ----------
+
+const toolsPaciente = [
+    {
+        type: "function",
+        function: {
+            name: "crear_reserva",
+            description: "Crea una reserva de los medicamentos pendientes de entrega del paciente en una farmacia especifica. Usar cuando el paciente pida reservar, retirar, pedir o buscar sus medicamentos en una farmacia puntual.",
+            parameters: {
+                type: "object",
+                properties: {
+                    nombre_farmacia: { type: "string", description: "Nombre o parte del nombre de la farmacia donde se quiere reservar" },
+                    medicamentos: { type: "array", items: { type: "string" }, description: "Nombres de los medicamentos a reservar. Si se omite, se reservan todos los medicamentos pendientes del paciente." },
+                },
+                required: ["nombre_farmacia"],
+            },
+        },
+    },
+];
+
+const toolsMedico = [
+    {
+        type: "function",
+        function: {
+            name: "crear_paciente",
+            description: "Crea un paciente nuevo y lo asigna al medico actual. Usar cuando el medico pida dar de alta o registrar un paciente nuevo.",
+            parameters: {
+                type: "object",
+                properties: {
+                    nombre: { type: "string", description: "Nombre del paciente" },
+                    apellido: { type: "string", description: "Apellido del paciente" },
+                    dni: { type: "string", description: "DNI del paciente, solo numeros" },
+                    obra_social: { type: "string", description: "Obra social del paciente, si se menciona" },
+                },
+                required: ["nombre", "apellido", "dni"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "crear_receta",
+            description: "Emite una receta nueva para un paciente ya asignado al medico actual, con uno o mas medicamentos. Usar cuando el medico pida recetar, emitir una receta o indicar medicamentos a un paciente.",
+            parameters: {
+                type: "object",
+                properties: {
+                    paciente: { type: "string", description: "Nombre, apellido o DNI del paciente al que se le emite la receta" },
+                    medicamentos: {
+                        type: "array",
+                        description: "Lista de medicamentos a recetar",
+                        items: {
+                            type: "object",
+                            properties: {
+                                nombre: { type: "string", description: "Nombre generico o comercial del medicamento" },
+                                cantidad: { type: "number", description: "Cantidad, por defecto 1" },
+                                indicaciones: { type: "string", description: "Indicaciones de uso, opcional" },
+                            },
+                            required: ["nombre"],
+                        },
+                    },
+                },
+                required: ["paciente", "medicamentos"],
+            },
+        },
+    },
+];
+
+const toolsFarmacia = [
+    {
+        type: "function",
+        function: {
+            name: "actualizar_stock",
+            description: "Actualiza la cantidad disponible y/o el precio de un medicamento en el stock de la farmacia actual. Si el medicamento no esta en el stock, lo agrega. Usar cuando el personal de la farmacia pida cargar, actualizar o modificar stock o precios.",
+            parameters: {
+                type: "object",
+                properties: {
+                    nombre_medicamento: { type: "string", description: "Nombre generico o comercial del medicamento" },
+                    cantidad: { type: "number", description: "Nueva cantidad disponible" },
+                    precio: { type: "number", description: "Nuevo precio, opcional" },
+                },
+                required: ["nombre_medicamento", "cantidad"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "obtener_estadisticas",
+            description: "Devuelve un resumen de las estadisticas de la farmacia actual: medicamentos mas buscados, oportunidades de stock (buscados y no encontrados), pedidos por estado, y facturacion/comision a traves de Farmatch. Usar cuando pregunten por estadisticas, numeros, facturacion o rendimiento de la farmacia.",
+            parameters: { type: "object", properties: {} },
+        },
+    },
+];
+
+function getToolsForRol(rol: Rol) {
+    if (rol === "paciente") return toolsPaciente;
+    if (rol === "medico") return toolsMedico;
+    if (rol === "farmacia") return toolsFarmacia;
+    return [];
+}
+
+// ---------- Ejecucion de herramientas contra Supabase ----------
+
+async function ejecutarHerramienta(nombre: string, args: any, ctx: { idPaciente?: number; idMedico?: number; idFarmacia?: number }): Promise<any> {
+    if (nombre === "crear_reserva") {
+        if (!ctx.idPaciente) return { error: "No se encontro el paciente." };
+        const { data: farmacias } = await supabase.from("farmacias").select("id_farmacia, nombre").ilike("nombre", `%${args.nombre_farmacia}%`);
+        if (!farmacias || farmacias.length === 0) return { error: `No se encontro ninguna farmacia que coincida con "${args.nombre_farmacia}".` };
+        const farmacia = farmacias[0];
+
+        const { data: recetasActivas } = await supabase.from("recetas").select("id_receta").eq("id_paciente", ctx.idPaciente).eq("estado", "activa");
+        if (!recetasActivas || recetasActivas.length === 0) return { error: "El paciente no tiene recetas activas." };
+        const idsRecetas = recetasActivas.map((r: any) => r.id_receta);
+
+        let itemsQuery = supabase.from("receta_items").select("id_item, id_medicamento, cantidad, medicamentos(nombre_generico)").in("id_receta", idsRecetas).eq("entregado", false);
+        const { data: itemsPendientes } = await itemsQuery;
+        if (!itemsPendientes || itemsPendientes.length === 0) return { error: "No hay medicamentos pendientes de entrega." };
+
+        let itemsAReservar = itemsPendientes;
+        if (args.medicamentos && args.medicamentos.length > 0) {
+            const nombresBuscados = args.medicamentos.map((m: string) => m.toLowerCase());
+            itemsAReservar = itemsPendientes.filter((it: any) => nombresBuscados.some((n: string) => it.medicamentos?.nombre_generico?.toLowerCase().includes(n)));
+            if (itemsAReservar.length === 0) return { error: `Ninguno de los medicamentos pedidos (${args.medicamentos.join(", ")}) esta pendiente de entrega.` };
+        }
+
+        const { data: reservaCreada, error: errReserva } = await supabase.from("reservas").insert({ id_paciente: ctx.idPaciente, id_farmacia: farmacia.id_farmacia, fecha: new Date().toISOString(), estado: "pendiente" }).select().single();
+        if (errReserva || !reservaCreada) return { error: "Ocurrio un error al crear la reserva." };
+
+        await supabase.from("reserva_items").insert(itemsAReservar.map((it: any) => ({ id_reserva: reservaCreada.id_reserva, id_item: it.id_item })));
+
+        return {
+            exito: true,
+            farmacia: farmacia.nombre,
+            medicamentos_reservados: itemsAReservar.map((it: any) => it.medicamentos?.nombre_generico ?? "medicamento"),
+            id_reserva: reservaCreada.id_reserva,
+        };
+    }
+    if (nombre === "crear_paciente") {
+        if (!ctx.idMedico) return { error: "No se encontro el medico." };
+        const { data: medico } = await supabase.from("medicos").select("especialidad").eq("id_medico", ctx.idMedico).single();
+        const { data: existente } = await supabase.from("pacientes").select("id_paciente, nombre, apellido").eq("dni", String(args.dni).trim()).maybeSingle();
+        if (existente) {
+            const { data: yaAsignado } = await supabase.from("paciente_medico").select("id").eq("id_paciente", existente.id_paciente).eq("id_medico", ctx.idMedico).maybeSingle();
+            if (yaAsignado) return { error: `${existente.nombre} ${existente.apellido} ya esta a tu cargo.` };
+            await supabase.from("paciente_medico").insert({ id_paciente: existente.id_paciente, id_medico: ctx.idMedico, especialidad: medico?.especialidad ?? "Clinica" });
+            return { exito: true, paciente: `${existente.nombre} ${existente.apellido}`, asignado_existente: true };
+        }
+        const { data: nuevoPaciente, error } = await supabase.from("pacientes").insert({
+            nombre: args.nombre, apellido: args.apellido, dni: String(args.dni).trim(),
+            email: `${String(args.dni).trim()}@farmatch.temp`, obra_social: args.obra_social || null,
+        }).select().single();
+        if (error || !nuevoPaciente) return { error: "Ocurrio un error al crear el paciente." };
+        await supabase.from("paciente_medico").insert({ id_paciente: nuevoPaciente.id_paciente, id_medico: ctx.idMedico, especialidad: medico?.especialidad ?? "Clinica" });
+        return { exito: true, paciente: `${args.nombre} ${args.apellido}`, asignado_existente: false };
+    }
+
+    if (nombre === "crear_receta") {
+        if (!ctx.idMedico) return { error: "No se encontro el medico." };
+        const { data: misPacientes } = await supabase.from("paciente_medico").select("id_paciente").eq("id_medico", ctx.idMedico);
+        if (!misPacientes || misPacientes.length === 0) return { error: "No tenes pacientes asignados." };
+        const idsMisPacientes = misPacientes.map((p: any) => p.id_paciente);
+        const { data: candidatos } = await supabase.from("pacientes").select("id_paciente, nombre, apellido, dni").in("id_paciente", idsMisPacientes);
+        const busqueda = String(args.paciente).toLowerCase();
+        const pacienteEncontrado = (candidatos ?? []).find((p: any) =>
+            p.dni.includes(busqueda) || `${p.nombre} ${p.apellido}`.toLowerCase().includes(busqueda) || p.nombre.toLowerCase().includes(busqueda) || p.apellido.toLowerCase().includes(busqueda)
+        );
+        if (!pacienteEncontrado) return { error: `No se encontro un paciente tuyo que coincida con "${args.paciente}".` };
+
+        const { data: recetaCreada, error: errReceta } = await supabase.from("recetas").insert({
+            id_paciente: pacienteEncontrado.id_paciente, id_medico: ctx.idMedico, estado: "activa",
+            fecha_vencimiento: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        }).select().single();
+        if (errReceta || !recetaCreada) return { error: "Ocurrio un error al crear la receta." };
+
+        const medicamentosNoEncontrados: string[] = [];
+        const itemsInsertados: string[] = [];
+        for (const med of args.medicamentos) {
+            const { data: medsEncontrados } = await supabase.from("medicamentos").select("id_medicamento, nombre_generico").or(`nombre_generico.ilike.%${med.nombre}%,nombre_comercial.ilike.%${med.nombre}%`).limit(1);
+            if (!medsEncontrados || medsEncontrados.length === 0) { medicamentosNoEncontrados.push(med.nombre); continue; }
+            await supabase.from("receta_items").insert({
+                id_receta: recetaCreada.id_receta, id_medicamento: medsEncontrados[0].id_medicamento,
+                cantidad: med.cantidad || 1, indicaciones: med.indicaciones || null, entregado: false,
+            });
+            itemsInsertados.push(medsEncontrados[0].nombre_generico);
+        }
+        return {
+            exito: true, paciente: `${pacienteEncontrado.nombre} ${pacienteEncontrado.apellido}`,
+            medicamentos_recetados: itemsInsertados, medicamentos_no_encontrados: medicamentosNoEncontrados,
+            id_receta: recetaCreada.id_receta,
+        };
+    }
+
+    if (nombre === "actualizar_stock") {
+        if (!ctx.idFarmacia) return { error: "No se encontro la farmacia." };
+        const { data: medsEncontrados } = await supabase.from("medicamentos").select("id_medicamento, nombre_generico").or(`nombre_generico.ilike.%${args.nombre_medicamento}%,nombre_comercial.ilike.%${args.nombre_medicamento}%`).limit(1);
+        if (!medsEncontrados || medsEncontrados.length === 0) return { error: `No se encontro el medicamento "${args.nombre_medicamento}".` };
+        const medicamento = medsEncontrados[0];
+        const { data: stockExistente } = await supabase.from("stock").select("id_stock").eq("id_farmacia", ctx.idFarmacia).eq("id_medicamento", medicamento.id_medicamento).maybeSingle();
+        if (stockExistente) {
+            const updateData: any = { cantidad_disponible: args.cantidad, ultima_actualizacion: new Date().toISOString() };
+            if (args.precio) updateData.precio = args.precio;
+            await supabase.from("stock").update(updateData).eq("id_stock", stockExistente.id_stock);
+        } else {
+            await supabase.from("stock").insert({ id_farmacia: ctx.idFarmacia, id_medicamento: medicamento.id_medicamento, cantidad_disponible: args.cantidad, precio: args.precio || 0, ultima_actualizacion: new Date().toISOString() });
+        }
+        return { exito: true, medicamento: medicamento.nombre_generico, cantidad: args.cantidad, precio: args.precio || null };
+    }
+
+    if (nombre === "obtener_estadisticas") {
+        if (!ctx.idFarmacia) return { error: "No se encontro la farmacia." };
+        const { data: reservasData } = await supabase.from("reservas").select("estado, comision").eq("id_farmacia", ctx.idFarmacia);
+        const contadores: Record<string, number> = { pendiente: 0, preparando: 0, lista: 0, entregada: 0, cancelada: 0 };
+        let totalComisiones = 0;
+        (reservasData ?? []).forEach((r: any) => { if (r.estado in contadores) contadores[r.estado]++; if (r.comision) totalComisiones += Number(r.comision); });
+
+        const { data: busquedasData } = await supabase.from("busquedas").select("id_medicamento, resultado").eq("id_farmacia", ctx.idFarmacia);
+        const conteoEncontrados: Record<number, number> = {}; const conteoNoEncontrados: Record<number, number> = {};
+        (busquedasData ?? []).forEach((b: any) => {
+            if (!b.id_medicamento) return;
+            if (b.resultado === "encontrado") conteoEncontrados[b.id_medicamento] = (conteoEncontrados[b.id_medicamento] || 0) + 1;
+            if (b.resultado === "no_encontrado") conteoNoEncontrados[b.id_medicamento] = (conteoNoEncontrados[b.id_medicamento] || 0) + 1;
+        });
+        const idsMeds = [...new Set([...Object.keys(conteoEncontrados), ...Object.keys(conteoNoEncontrados)].map(Number))];
+        const { data: medsData } = idsMeds.length > 0 ? await supabase.from("medicamentos").select("id_medicamento, nombre_generico").in("id_medicamento", idsMeds) : { data: [] as any[] };
+        const nombreMed = (id: number) => (medsData ?? []).find((m: any) => m.id_medicamento === id)?.nombre_generico ?? "desconocido";
+
+        const masBuscados = Object.entries(conteoEncontrados).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5).map(([id, cant]) => ({ medicamento: nombreMed(Number(id)), busquedas: cant }));
+        const oportunidades = Object.entries(conteoNoEncontrados).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5).map(([id, cant]) => ({ medicamento: nombreMed(Number(id)), veces_no_encontrado: cant }));
+
+        return { exito: true, pedidos_por_estado: contadores, comision_total_farmatch: Math.round(totalComisiones * 100) / 100, mas_buscados: masBuscados, oportunidades_de_stock: oportunidades };
+    }
+
+    return { error: "Herramienta no reconocida." };
+}
+
+async function llamarCohere(mensajesAPI: any[], tools: any[]) {
+    return fetch("https://api.cohere.com/v2/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${COHERE_API_KEY}` },
+        body: JSON.stringify({
+            model: "command-r-plus-08-2024",
+            messages: mensajesAPI,
+            ...(tools.length > 0 ? { tools } : {}),
+        }),
+    });
+}
+
+export default function ChatIA({ rol, contexto, idPaciente, idMedico, idFarmacia }: Props) {
     const [abierto, setAbierto] = useState(false);
     const [mensajes, setMensajes] = useState<Mensaje[]>([{ rol: "assistant", contenido: mensajeInicial[rol] }]);
     const [input, setInput] = useState("");
@@ -64,23 +309,40 @@ export default function ChatIA({ rol, contexto }: Props) {
         setInput("");
         setCargando(true);
         try {
-            const response = await fetch("https://api.cohere.com/v2/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${COHERE_API_KEY}` },
-                body: JSON.stringify({
-                    model: "command-r-plus-08-2024",
-                    messages: [
-                        { role: "system", content: systemPrompt(rol, contexto) },
-                        ...nuevosMensajes.map((m) => ({ role: m.rol === "user" ? "user" : "assistant", content: m.contenido })),
-                    ],
-                }),
-            });
+            const tools = getToolsForRol(rol);
+            let mensajesAPI: any[] = [
+                { role: "system", content: systemPrompt(rol, contexto) },
+                ...nuevosMensajes.map((m) => ({ role: m.rol === "user" ? "user" : "assistant", content: m.contenido })),
+            ];
+
+            let response = await llamarCohere(mensajesAPI, tools);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
+            let data = await response.json();
+
+            if (data.message?.tool_calls && data.message.tool_calls.length > 0) {
+                const toolCalls = data.message.tool_calls;
+                mensajesAPI.push({ role: "assistant", tool_calls: toolCalls, tool_plan: data.message.tool_plan ?? "" });
+
+                for (const tc of toolCalls) {
+                    let args: any = {};
+                    try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
+                    const resultado = await ejecutarHerramienta(tc.function.name, args, { idPaciente, idMedico, idFarmacia });
+                    mensajesAPI.push({
+                        role: "tool",
+                        tool_call_id: tc.id,
+                        content: [{ type: "document", document: { data: JSON.stringify(resultado) } }],
+                    });
+                }
+
+                response = await llamarCohere(mensajesAPI, tools);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                data = await response.json();
+            }
+
             const respuesta = data.message?.content?.[0]?.text ?? "No pude procesar la respuesta.";
             setMensajes([...nuevosMensajes, { rol: "assistant", contenido: respuesta }]);
         } catch {
-            setMensajes([...nuevosMensajes, { rol: "assistant", contenido: "Hubo un error al conectar con el asistente. Intentá de nuevo." }]);
+            setMensajes([...nuevosMensajes, { rol: "assistant", contenido: "Hubo un error al conectar con el asistente. Intenta de nuevo." }]);
         } finally {
             setCargando(false);
         }
@@ -110,7 +372,7 @@ export default function ChatIA({ rol, contexto }: Props) {
                         </div>
                         <div>
                             <p className="text-white font-semibold text-sm">{titulo[rol]}</p>
-                            <p className="text-blue-200 text-xs">Powered by IA · No reemplaza consulta médica</p>
+                            <p className="text-blue-200 text-xs">Powered by IA - No reemplaza consulta medica</p>
                         </div>
                     </div>
 
@@ -168,7 +430,7 @@ export default function ChatIA({ rol, contexto }: Props) {
                                 {cargando ? <Loader size={15} className="text-white animate-spin" /> : <Send size={15} className="text-white" />}
                             </button>
                         </div>
-                        <p style={{ color: dark ? "#475569" : "#cbd5e1" }} className="text-xs text-center mt-2">Solo informativo · No reemplaza consulta médica</p>
+                        <p style={{ color: dark ? "#475569" : "#cbd5e1" }} className="text-xs text-center mt-2">Solo informativo - No reemplaza consulta medica</p>
                     </div>
                 </div>
             )}
