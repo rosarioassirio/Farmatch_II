@@ -171,7 +171,7 @@ export default function DashboardFarmacia() {
         const siguiente = SIGUIENTE_ESTADO[reserva.estado];
         if (!siguiente) return;
         const { error } = await supabase.from("reservas").update({ estado: siguiente }).eq("id_reserva", reserva.id_reserva);
-        if (error) return;
+        if (error) { console.error("Error al avanzar estado:", error); alert("Error: " + error.message); return; }
         setReservas((prev) => prev.map((r) => r.id_reserva === reserva.id_reserva ? { ...r, estado: siguiente } : r));
         if (siguiente === "entregada") {
             const { data: reservaItems } = await supabase.from("reserva_items").select("id_item").eq("id_reserva", reserva.id_reserva);

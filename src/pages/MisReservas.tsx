@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
-import { ArrowLeft, Clock, CheckCircle, Package, XCircle, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Clock, CheckCircle, Package, XCircle, AlertTriangle, QrCode } from "lucide-react";
 
 type EstadoReserva = "pendiente" | "preparando" | "lista" | "entregada" | "cancelada";
 
 interface Reserva {
     id_reserva: number; id_farmacia: number; fecha: string; estado: EstadoReserva; nota_interna: string | null;
     farmacias: { nombre: string; direccion: string };
-    reserva_items: { id: number; receta_items: { medicamentos: { nombre_generico: string; nombre_comercial: string | null }; cantidad: number; indicaciones: string | null } }[];
+    reserva_items: { id: number; receta_items: { id_receta: number; medicamentos: { nombre_generico: string; nombre_comercial: string | null }; cantidad: number; indicaciones: string | null } }[];
 }
 
 const ESTADOS: EstadoReserva[] = ["pendiente", "preparando", "lista", "entregada"];
@@ -74,13 +74,13 @@ export default function MisReservas() {
             const { data: farmaciasData } = await supabase.from("farmacias").select("id_farmacia, nombre, direccion").in("id_farmacia", ids_farmacia);
             const { data: reservaItemsData } = await supabase.from("reserva_items").select("id, id_reserva, id_item").in("id_reserva", ids_reserva);
             const ids_item = (reservaItemsData || []).map((ri: any) => ri.id_item).filter(Boolean);
-            const { data: recetaItemsData } = ids_item.length > 0 ? await supabase.from("receta_items").select("id_item, cantidad, indicaciones, id_medicamento").in("id_item", ids_item) : { data: [] as any[] };
+            const { data: recetaItemsData } = ids_item.length > 0 ? await supabase.from("receta_items").select("id_item, id_receta, cantidad, indicaciones, id_medicamento").in("id_item", ids_item) : { data: [] as any[] };
             const ids_medicamento = [...new Set((recetaItemsData || []).map((ri: any) => ri.id_medicamento))];
             const { data: medicamentosData } = ids_medicamento.length > 0 ? await supabase.from("medicamentos").select("id_medicamento, nombre_generico, nombre_comercial").in("id_medicamento", ids_medicamento) : { data: [] as any[] };
             const farmaciasMap: Record<number, any> = {}; (farmaciasData || []).forEach((f: any) => { farmaciasMap[f.id_farmacia] = f; });
             const medMap: Record<number, any> = {}; (medicamentosData || []).forEach((m: any) => { medMap[m.id_medicamento] = m; });
-            const recetaItemsMap: Record<number, any> = {}; (recetaItemsData || []).forEach((ri: any) => { recetaItemsMap[ri.id_item] = { cantidad: ri.cantidad, indicaciones: ri.indicaciones, medicamentos: medMap[ri.id_medicamento] || { nombre_generico: "Medicamento", nombre_comercial: null } }; });
-            const itemsByReserva: Record<number, any[]> = {}; (reservaItemsData || []).forEach((ri: any) => { if (!itemsByReserva[ri.id_reserva]) itemsByReserva[ri.id_reserva] = []; itemsByReserva[ri.id_reserva].push({ id: ri.id, receta_items: recetaItemsMap[ri.id_item] || { cantidad: 1, indicaciones: null, medicamentos: { nombre_generico: "Medicamento", nombre_comercial: null } } }); });
+            const recetaItemsMap: Record<number, any> = {}; (recetaItemsData || []).forEach((ri: any) => { recetaItemsMap[ri.id_item] = { id_receta: ri.id_receta, cantidad: ri.cantidad, indicaciones: ri.indicaciones, medicamentos: medMap[ri.id_medicamento] || { nombre_generico: "Medicamento", nombre_comercial: null } }; });
+            const itemsByReserva: Record<number, any[]> = {}; (reservaItemsData || []).forEach((ri: any) => { if (!itemsByReserva[ri.id_reserva]) itemsByReserva[ri.id_reserva] = []; itemsByReserva[ri.id_reserva].push({ id: ri.id, receta_items: recetaItemsMap[ri.id_item] || { id_receta: 0, cantidad: 1, indicaciones: null, medicamentos: { nombre_generico: "Medicamento", nombre_comercial: null } } }); });
             setReservas(reservasData.map((r: any) => ({ ...r, farmacias: farmaciasMap[r.id_farmacia] || { nombre: "Farmacia", direccion: "" }, reserva_items: itemsByReserva[r.id_reserva] || [] })));
         } catch (e: any) { setError(e.message || "Error al cargar reservas"); }
         finally { setLoading(false); }
@@ -92,7 +92,7 @@ export default function MisReservas() {
             const { error: err } = await supabase.from("reservas").update({ estado: "cancelada" }).eq("id_reserva", id_reserva);
             if (err) throw err;
             setReservas(prev => prev.map(r => r.id_reserva === id_reserva ? { ...r, estado: "cancelada" } : r));
-        } catch { setError("No se pudo cancelar la reserva. Intentá de nuevo."); }
+        } catch { setError("No se pudo cancelar la reserva. Intenta de nuevo."); }
         finally { setCancelando(null); setConfirmarCancelar(null); }
     }
 
@@ -128,8 +128,8 @@ export default function MisReservas() {
                 ) : reservas.length === 0 ? (
                     <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm p-10 text-center">
                         <Package size={36} className="text-slate-300 mx-auto mb-3" />
-                        <p className="font-medium text-slate-600 dark:text-slate-300">Sin reservas aún</p>
-                        <p className="text-sm text-slate-400 mt-1">Buscá un medicamento para hacer tu primera reserva.</p>
+                        <p className="font-medium text-slate-600 dark:text-slate-300">Sin reservas aun</p>
+                        <p className="text-sm text-slate-400 mt-1">Busca un medicamento para hacer tu primera reserva.</p>
                         <button onClick={() => navigate("/buscar-medicamentos")} className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 transition-colors">Buscar medicamento</button>
                     </div>
                 ) : (
@@ -157,13 +157,13 @@ export default function MisReservas() {
                             <div className="p-2 bg-red-50 dark:bg-red-900/20 rounded-xl"><XCircle size={22} className="text-red-600" /></div>
                             <div>
                                 <h3 className="font-semibold text-slate-800 dark:text-slate-100">Cancelar reserva</h3>
-                                <p className="text-sm text-slate-500 dark:text-slate-400">Esta acción no se puede deshacer.</p>
+                                <p className="text-sm text-slate-500 dark:text-slate-400">Esta accion no se puede deshacer.</p>
                             </div>
                         </div>
-                        <p className="text-sm text-slate-600 dark:text-slate-300">La farmacia será notificada. Podés hacer una nueva reserva en cualquier momento.</p>
+                        <p className="text-sm text-slate-600 dark:text-slate-300">La farmacia sera notificada. Podes hacer una nueva reserva en cualquier momento.</p>
                         <div className="flex gap-3 pt-1">
                             <button onClick={() => setConfirmarCancelar(null)} className="flex-1 py-2.5 border border-slate-200 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Volver</button>
-                            <button onClick={() => cancelarReserva(confirmarCancelar)} disabled={cancelando !== null} className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 disabled:opacity-60">{cancelando !== null ? "Cancelando..." : "Sí, cancelar"}</button>
+                            <button onClick={() => cancelarReserva(confirmarCancelar)} disabled={cancelando !== null} className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 disabled:opacity-60">{cancelando !== null ? "Cancelando..." : "Si, cancelar"}</button>
                         </div>
                     </div>
                 </div>
@@ -174,11 +174,13 @@ export default function MisReservas() {
 
 function ReservaCard({ reserva, onCancelar, cancelando }: { reserva: Reserva; onCancelar: () => void; cancelando: boolean }) {
     const [expandida, setExpandida] = useState(false);
+    const [qrVisible, setQrVisible] = useState(false);
     const cfg = ESTADO_CONFIG[reserva.estado];
     const esPendiente = reserva.estado === "pendiente";
     const esCancelada = reserva.estado === "cancelada";
     const esEntregada = reserva.estado === "entregada";
     const fecha = new Date(reserva.fecha).toLocaleDateString("es-AR", { day: "numeric", month: "short", year: "numeric" });
+    const idsRecetas = [...new Set(reserva.reserva_items.map(item => item.receta_items.id_receta).filter(Boolean))];
 
     return (
         <div className={`bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm overflow-hidden ${esCancelada ? "opacity-70" : ""}`}>
@@ -192,7 +194,7 @@ function ReservaCard({ reserva, onCancelar, cancelando }: { reserva: Reserva; on
                 </div>
                 <div className="flex items-center gap-3 mt-2 text-xs text-slate-400">
                     <div className="flex items-center gap-1"><Clock size={11} />{fecha}</div>
-                    <span>·</span>
+                    <span>-</span>
                     <span>{reserva.reserva_items.length} medicamento{reserva.reserva_items.length !== 1 ? "s" : ""}</span>
                     <span className="ml-auto text-blue-500 font-medium">{expandida ? "Ocultar" : "Ver detalle"}</span>
                 </div>
@@ -207,8 +209,8 @@ function ReservaCard({ reserva, onCancelar, cancelando }: { reserva: Reserva; on
                         reserva.reserva_items.map(item => (
                             <div key={item.id} className="text-sm">
                                 <span className="font-medium text-slate-700 dark:text-slate-200">{item.receta_items.medicamentos.nombre_generico}</span>
-                                {item.receta_items.medicamentos.nombre_comercial && <span className="text-slate-400"> · {item.receta_items.medicamentos.nombre_comercial}</span>}
-                                <span className="text-slate-400"> — {item.receta_items.cantidad} unid.</span>
+                                {item.receta_items.medicamentos.nombre_comercial && <span className="text-slate-400"> - {item.receta_items.medicamentos.nombre_comercial}</span>}
+                                <span className="text-slate-400"> - {item.receta_items.cantidad} unid.</span>
                                 {item.receta_items.indicaciones && <p className="text-xs text-slate-400 mt-0.5">{item.receta_items.indicaciones}</p>}
                             </div>
                         ))
@@ -221,6 +223,27 @@ function ReservaCard({ reserva, onCancelar, cancelando }: { reserva: Reserva; on
                     {esEntregada && (
                         <div className="flex items-center gap-1.5 text-xs text-green-600 pt-1">
                             <CheckCircle size={13} />Medicamentos marcados como entregados en tu receta.
+                        </div>
+                    )}
+                    {!esCancelada && idsRecetas.length > 0 && (
+                        <div className="pt-2 border-t border-slate-100 dark:border-slate-700">
+                            <button onClick={e => { e.stopPropagation(); setQrVisible(v => !v); }} className="flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors">
+                                <QrCode size={16} />
+                                {qrVisible ? "Ocultar QR de validacion" : "Mostrar QR de validacion"}
+                            </button>
+                            {qrVisible && (
+                                <div className="mt-3 flex flex-wrap gap-4">
+                                    {idsRecetas.map(idReceta => (
+                                        <div key={idReceta} className="flex items-start gap-3">
+                                            <img src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=farmatch-receta-${idReceta}&color=1e40af&bgcolor=f0f9ff`} alt={`QR receta ${idReceta}`} className="rounded-xl border border-blue-100 shadow-sm" width={110} height={110} />
+                                            <div className="text-xs text-slate-400 space-y-1 pt-1">
+                                                <p className="font-medium text-slate-600 dark:text-slate-300">Receta #{idReceta}</p>
+                                                <p className="text-slate-300 dark:text-slate-600">ID: farmatch-receta-{idReceta}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
                     {esPendiente && (

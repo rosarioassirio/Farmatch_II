@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
 import ChatIA from "../components/ChatIA";
-import { Users, FileText, PlusCircle, LogOut, ChevronDown, ChevronUp, CheckCircle, Clock, Search, Trash2, AlertCircle, X, UserPlus, Sun, Moon } from "lucide-react";
+import { Users, FileText, PlusCircle, LogOut, ChevronDown, ChevronUp, CheckCircle, Clock, Search, Trash2, AlertCircle, X, UserPlus, Sun, Moon, Download } from "lucide-react";
+import { jsPDF } from "jspdf";
 import { FarmatchLogoHorizontal } from "../components/FarmatchLogo";
 import { useDarkMode } from "../hooks/useDarkMode";
 
@@ -11,6 +12,7 @@ interface Medicamento { id_medicamento: number; nombre_generico: string; nombre_
 interface RecetaItem { id_item: number; id_medicamento: number; cantidad: number; indicaciones: string | null; entregado: boolean; medicamentos: { nombre_generico: string; nombre_comercial: string | null }; }
 interface Receta { id_receta: number; id_paciente: number; estado: "activa" | "completada"; fecha_emision: string; pacientes: { nombre: string; apellido: string; dni: string }; receta_items: RecetaItem[]; }
 interface ItemForm { id_medicamento: number | null; cantidad: number; indicaciones: string; }
+interface Diagnostico { id_diagnostico: number; id_paciente: number; id_medico: number; descripcion: string; fecha: string; }
 
 const initials = (nombre: string, apellido: string) => `${nombre[0]}${apellido[0]}`.toUpperCase();
 const avatarColor = (id: number) => { const p = ["bg-blue-100 text-blue-700", "bg-indigo-100 text-indigo-700", "bg-sky-100 text-sky-700", "bg-blue-200 text-blue-800"]; return p[id % p.length]; };
@@ -22,6 +24,41 @@ function getBadgeReceta(fechaEmision: string, estado: string) {
     if (vencida) return { color: "bg-red-50 text-red-700 border-red-200", label: "Vencida" };
     if (estado === "completada") return { color: "bg-green-50 text-green-700 border-green-200", label: "Completada" };
     return { color: "bg-amber-50 text-amber-700 border-amber-200", label: "Activa" };
+}
+
+function generarPdfRecetaMedico(receta: Receta, medicoNombre: string) {
+    const doc = new jsPDF();
+    doc.setFontSize(18);
+    doc.text("FARMATCH", 14, 20);
+    doc.setFontSize(11);
+    doc.text("Receta digital", 14, 27);
+    doc.setLineWidth(0.5);
+    doc.line(14, 32, 196, 32);
+
+    doc.setFontSize(10);
+    doc.text(`Receta N: ${receta.id_receta}`, 14, 42);
+    doc.text(`Fecha de emision: ${new Date(receta.fecha_emision).toLocaleDateString("es-AR")}`, 14, 49);
+    doc.text(`Estado: ${receta.estado}`, 14, 56);
+    doc.text(`Paciente: ${receta.pacientes.nombre} ${receta.pacientes.apellido}`, 14, 66);
+    doc.text(`DNI: ${receta.pacientes.dni}`, 14, 73);
+    doc.text(`Medico: Dr/a. ${medicoNombre}`, 14, 80);
+
+    doc.setFontSize(12);
+    doc.text("Medicamentos:", 14, 94);
+    doc.setFontSize(10);
+    let y = 102;
+    receta.receta_items.forEach((item, i) => {
+        doc.text(`${i + 1}. ${item.medicamentos.nombre_generico}${item.medicamentos.nombre_comercial ? ` (${item.medicamentos.nombre_comercial})` : ""} - Cantidad: ${item.cantidad}`, 14, y);
+        y += 6;
+        if (item.indicaciones) { doc.text(`   ${item.indicaciones}`, 14, y); y += 6; }
+        doc.text(`   Estado: ${item.entregado ? "Entregado" : "Pendiente"}`, 14, y);
+        y += 9;
+    });
+
+    doc.setFontSize(8);
+    doc.text(`ID de validacion: farmatch-receta-${receta.id_receta}`, 14, 285);
+
+    doc.save(`receta-farmatch-${receta.id_receta}.pdf`);
 }
 
 export default function DashboardMedico() {
@@ -50,6 +87,17 @@ export default function DashboardMedico() {
     const [newDni, setNewDni] = useState("");
     const [newObraSocial, setNewObraSocial] = useState("");
     const [savingPaciente, setSavingPaciente] = useState(false);
+    const [showModalEditar, setShowModalEditar] = useState(false);
+    const [editPacienteId, setEditPacienteId] = useState<number | null>(null);
+    const [editNombre, setEditNombre] = useState("");
+    const [editApellido, setEditApellido] = useState("");
+    const [editDni, setEditDni] = useState("");
+    const [editObraSocial, setEditObraSocial] = useState("");
+    const [savingEdicion, setSavingEdicion] = useState(false);
+    const [diagnosticos, setDiagnosticos] = useState<Diagnostico[]>([]);
+    const [expandedPacienteDiag, setExpandedPacienteDiag] = useState<number | null>(null);
+    const [nuevoDiagnostico, setNuevoDiagnostico] = useState("");
+    const [savingDiagnostico, setSavingDiagnostico] = useState(false);
 
     const card = "rounded-2xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 shadow-sm";
     const inp = "rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent";
@@ -64,7 +112,7 @@ export default function DashboardMedico() {
             if (!medico) return navigate("/");
             setMedicoId(medico.id_medico);
             setMedicoNombre(`${medico.nombre} ${medico.apellido}`);
-            await Promise.all([loadMisPacientes(medico.id_medico), loadTodosPacientes(), loadRecetas(medico.id_medico), loadMedicamentos()]);
+            await Promise.all([loadMisPacientes(medico.id_medico), loadTodosPacientes(), loadRecetas(medico.id_medico), loadMedicamentos(), loadDiagnosticos()]);
             setLoading(false);
         })();
     }, []);
@@ -86,6 +134,7 @@ export default function DashboardMedico() {
     };
 
     const loadMedicamentos = async () => { const { data } = await supabase.from("medicamentos").select("id_medicamento, nombre_generico, nombre_comercial").order("nombre_generico"); setMedicamentos(data ?? []); };
+    const loadDiagnosticos = async () => { const { data } = await supabase.from("diagnosticos").select("*").order("fecha", { ascending: false }); setDiagnosticos(data ?? []); };
     const showToast = (msg: string, type: "ok" | "err") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500); };
     const handleLogout = async () => { await supabase.auth.signOut(); navigate("/"); };
 
@@ -109,14 +158,41 @@ export default function DashboardMedico() {
         finally { setSavingPaciente(false); }
     };
 
+    const handleAbrirEditar = (p: Paciente) => {
+        setEditPacienteId(p.id_paciente);
+        setEditNombre(p.nombre);
+        setEditApellido(p.apellido);
+        setEditDni(p.dni);
+        setEditObraSocial(p.obra_social ?? "");
+        setShowModalEditar(true);
+    };
+
+    const handleGuardarEdicion = async () => {
+        if (!editNombre.trim() || !editApellido.trim() || !editDni.trim()) return showToast("Nombre, apellido y DNI son obligatorios.", "err");
+        setSavingEdicion(true);
+        try {
+            const { error } = await supabase.from("pacientes").update({
+                nombre: editNombre.trim(),
+                apellido: editApellido.trim(),
+                dni: editDni.trim(),
+                obra_social: editObraSocial.trim() || null,
+            }).eq("id_paciente", editPacienteId);
+            if (error) throw error;
+            showToast("Paciente actualizado.", "ok");
+            setShowModalEditar(false);
+            await Promise.all([loadMisPacientes(medicoId!), loadTodosPacientes()]);
+        } catch (e: any) { showToast(e?.code === "23505" ? "Ya existe un paciente con ese DNI." : "Error al actualizar el paciente.", "err"); }
+        finally { setSavingEdicion(false); }
+    };
+
     const addItem = () => setFormItems([...formItems, { id_medicamento: null, cantidad: 1, indicaciones: "" }]);
     const removeItem = (i: number) => setFormItems(formItems.filter((_, idx) => idx !== i));
     const updateItem = (i: number, field: keyof ItemForm, value: ItemForm[keyof ItemForm]) => setFormItems(formItems.map((item, idx) => idx === i ? { ...item, [field]: value } : item));
 
     const handleCrearReceta = async () => {
-        if (!formPacienteId) return showToast("Seleccioná un paciente.", "err");
-        if (formItems.some((it) => !it.id_medicamento)) return showToast("Seleccioná un medicamento en cada fila.", "err");
-        if (formItems.some((it) => it.cantidad < 1)) return showToast("La cantidad mínima es 1.", "err");
+        if (!formPacienteId) return showToast("Selecciona un paciente.", "err");
+        if (formItems.some((it) => !it.id_medicamento)) return showToast("Selecciona un medicamento en cada fila.", "err");
+        if (formItems.some((it) => it.cantidad < 1)) return showToast("La cantidad minima es 1.", "err");
         setSubmitting(true);
         try {
             const { data: receta, error: errReceta } = await supabase
@@ -133,7 +209,7 @@ export default function DashboardMedico() {
             showToast("Receta emitida exitosamente.", "ok");
             setFormPacienteId(null); setFormSearchPaciente(""); setFormItems([{ id_medicamento: null, cantidad: 1, indicaciones: "" }]);
             await loadRecetas(medicoId!); setTab("historial");
-        } catch { showToast("Error al crear la receta. Intentá de nuevo.", "err"); }
+        } catch { showToast("Error al crear la receta. Intenta de nuevo.", "err"); }
         finally { setSubmitting(false); }
     };
 
@@ -142,6 +218,19 @@ export default function DashboardMedico() {
     const pacienteSuggestions = formSearchPaciente.length >= 2 ? todosPacientes.filter((p) => { const q = formSearchPaciente.toLowerCase(); return p.nombre.toLowerCase().includes(q) || p.apellido.toLowerCase().includes(q) || `${p.nombre} ${p.apellido}`.toLowerCase().includes(q) || p.dni.includes(q); }).slice(0, 8) : [];
     const selectedPaciente = todosPacientes.find((p) => p.id_paciente === formPacienteId);
     const recetasPorPaciente = (id: number) => recetas.filter((r) => r.id_paciente === id);
+    const getDiagnosticosPaciente = (id: number) => diagnosticos.filter((d) => d.id_paciente === id);
+    const handleAgregarDiagnostico = async (idPaciente: number) => {
+        if (!nuevoDiagnostico.trim()) return showToast("Escribi una descripcion.", "err");
+        setSavingDiagnostico(true);
+        try {
+            const { error } = await supabase.from("diagnosticos").insert({ id_paciente: idPaciente, id_medico: medicoId, descripcion: nuevoDiagnostico.trim() });
+            if (error) throw error;
+            setNuevoDiagnostico("");
+            showToast("Diagnostico agregado.", "ok");
+            await loadDiagnosticos();
+        } catch { showToast("Error al agregar el diagnostico.", "err"); }
+        finally { setSavingDiagnostico(false); }
+    };
     const statsActivas = recetas.filter((r) => r.estado === "activa").length;
     const statsCompletadas = recetas.filter((r) => r.estado === "completada").length;
 
@@ -165,7 +254,7 @@ export default function DashboardMedico() {
                             <button onClick={() => { setShowModalPaciente(false); setNewNombre(""); setNewApellido(""); setNewDni(""); setNewObraSocial(""); }} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
                         </div>
                         <div className="grid grid-cols-2 gap-3">
-                            {[{ label: "Nombre *", value: newNombre, onChange: setNewNombre, placeholder: "Lucía" }, { label: "Apellido *", value: newApellido, onChange: setNewApellido, placeholder: "Fernández" }].map(({ label, value, onChange, placeholder }) => (
+                            {[{ label: "Nombre *", value: newNombre, onChange: setNewNombre, placeholder: "Lucia" }, { label: "Apellido *", value: newApellido, onChange: setNewApellido, placeholder: "Fernandez" }].map(({ label, value, onChange, placeholder }) => (
                                 <div key={label}>
                                     <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wide">{label}</label>
                                     <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className={`w-full px-3 py-2.5 text-sm ${inp}`} />
@@ -180,12 +269,48 @@ export default function DashboardMedico() {
                                 <input type="text" value={newObraSocial} onChange={(e) => setNewObraSocial(e.target.value)} placeholder="OSDE, IOMA..." className={`w-full px-3 py-2.5 text-sm ${inp}`} />
                             </div>
                         </div>
-                        <p className="text-xs text-slate-400">El paciente quedará asignado a tu cargo automáticamente.</p>
+                        <p className="text-xs text-slate-400">El paciente quedara asignado a tu cargo automaticamente.</p>
                         <div className="flex gap-2 pt-1">
                             <button onClick={() => { setShowModalPaciente(false); setNewNombre(""); setNewApellido(""); setNewDni(""); setNewObraSocial(""); }} className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Cancelar</button>
                             <button onClick={handleAgregarPaciente} disabled={savingPaciente} className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-semibold">
                                 {savingPaciente ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <UserPlus size={15} />}
                                 {savingPaciente ? "Guardando..." : "Agregar paciente"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showModalEditar && (
+                <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h3 className="font-semibold text-slate-800 dark:text-slate-100 text-base">Editar paciente</h3>
+                            <button onClick={() => setShowModalEditar(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wide">Nombre *</label>
+                                <input type="text" value={editNombre} onChange={(e) => setEditNombre(e.target.value)} className={`w-full px-3 py-2.5 text-sm ${inp}`} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wide">Apellido *</label>
+                                <input type="text" value={editApellido} onChange={(e) => setEditApellido(e.target.value)} className={`w-full px-3 py-2.5 text-sm ${inp}`} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wide">DNI *</label>
+                                <input type="text" value={editDni} onChange={(e) => setEditDni(e.target.value.replace(/\D/g, ""))} maxLength={8} className={`w-full px-3 py-2.5 text-sm ${inp}`} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wide">Obra social</label>
+                                <input type="text" value={editObraSocial} onChange={(e) => setEditObraSocial(e.target.value)} className={`w-full px-3 py-2.5 text-sm ${inp}`} />
+                            </div>
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                            <button onClick={() => setShowModalEditar(false)} className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Cancelar</button>
+                            <button onClick={handleGuardarEdicion} disabled={savingEdicion} className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-semibold">
+                                {savingEdicion ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <UserPlus size={15} />}
+                                {savingEdicion ? "Guardando..." : "Guardar cambios"}
                             </button>
                         </div>
                     </div>
@@ -201,7 +326,7 @@ export default function DashboardMedico() {
                         </button>
                         <div className="text-right hidden sm:block">
                             <p className="text-sm font-semibold text-slate-700 dark:text-slate-100">Dr. {medicoNombre}</p>
-                            <p className="text-xs text-slate-400">Médico</p>
+                            <p className="text-xs text-slate-400">Medico</p>
                         </div>
                         <button onClick={handleLogout} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-red-500 transition px-2 py-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20">
                             <LogOut size={15} /><span className="hidden sm:inline">Salir</span>
@@ -245,7 +370,7 @@ export default function DashboardMedico() {
                         {filteredMisPacientes.length === 0 ? (
                             <div className={`${card} p-8 text-center`}>
                                 <Users size={32} className="text-slate-300 mx-auto mb-2" />
-                                <p className="text-slate-500 dark:text-slate-400 text-sm font-medium mb-1">{searchPaciente ? "No hay pacientes que coincidan." : "Todavía no tenés pacientes asignados."}</p>
+                                <p className="text-slate-500 dark:text-slate-400 text-sm font-medium mb-1">{searchPaciente ? "No hay pacientes que coincidan." : "Todavia no tenes pacientes asignados."}</p>
                                 {!searchPaciente && <button onClick={() => setShowModalPaciente(true)} className="mt-2 text-sm text-blue-600 hover:text-blue-800 font-medium">Agregar el primero</button>}
                             </div>
                         ) : (
@@ -262,16 +387,43 @@ export default function DashboardMedico() {
                                                         <p className="font-semibold text-slate-800 dark:text-slate-100">{p.nombre} {p.apellido}</p>
                                                         {activas > 0 && <span className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 px-2 py-0.5 rounded-full font-medium">{activas} receta{activas > 1 ? "s" : ""} activa{activas > 1 ? "s" : ""}</span>}
                                                     </div>
-                                                    <p className="text-xs text-slate-400 mt-0.5">DNI {p.dni}{p.obra_social ? ` · ${p.obra_social}` : ""}</p>
+                                                    <p className="text-xs text-slate-400 mt-0.5">DNI {p.dni}{p.obra_social ? ` - ${p.obra_social}` : ""}</p>
                                                     {recs.length > 0 && (
                                                         <div className="mt-2 flex flex-wrap gap-1.5">
-                                                            {recs.slice(0, 3).map((r, idx) => { const badge = getBadgeReceta(r.fecha_emision, r.estado); return <span key={r.id_receta} className={`text-xs px-2 py-0.5 rounded-full font-medium border ${badge.color}`}>Receta #{idx + 1} · {badge.label}</span>; })}
-                                                            {recs.length > 3 && <span className="text-xs text-slate-400">+{recs.length - 3} más</span>}
+                                                            {recs.slice(0, 3).map((r, idx) => { const badge = getBadgeReceta(r.fecha_emision, r.estado); return <span key={r.id_receta} className={`text-xs px-2 py-0.5 rounded-full font-medium border ${badge.color}`}>Receta #{idx + 1} - {badge.label}</span>; })}
+                                                            {recs.length > 3 && <span className="text-xs text-slate-400">+{recs.length - 3} mas</span>}
                                                         </div>
                                                     )}
                                                 </div>
-                                                <button onClick={() => { setFormPacienteId(p.id_paciente); setFormSearchPaciente(`${p.nombre} ${p.apellido}`); setTab("crear"); }} className="flex-shrink-0 text-xs font-medium text-blue-600 hover:text-blue-800 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition-colors">Nueva receta</button>
+                                                <div className="flex flex-col gap-2 flex-shrink-0">
+                                                    <button onClick={() => { setFormPacienteId(p.id_paciente); setFormSearchPaciente(`${p.nombre} ${p.apellido}`); setTab("crear"); }} className="text-xs font-medium text-blue-600 hover:text-blue-800 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition-colors">Nueva receta</button>
+                                                    <button onClick={() => setExpandedPacienteDiag(expandedPacienteDiag === p.id_paciente ? null : p.id_paciente)} className="text-xs font-medium text-slate-600 hover:text-slate-800 bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 px-3 py-1.5 rounded-lg transition-colors">Diagnosticos</button>
+                                                    <button onClick={() => handleAbrirEditar(p)} className="text-xs font-medium text-slate-600 hover:text-slate-800 bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 px-3 py-1.5 rounded-lg transition-colors">Editar</button>
+                                                </div>
                                             </div>
+                                            {expandedPacienteDiag === p.id_paciente && (
+                                                <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700 space-y-3">
+                                                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Diagnosticos</p>
+                                                    {getDiagnosticosPaciente(p.id_paciente).length === 0 ? (
+                                                        <p className="text-xs text-slate-400">Sin diagnosticos registrados.</p>
+                                                    ) : (
+                                                        <div className="space-y-2">
+                                                            {getDiagnosticosPaciente(p.id_paciente).map((d) => (
+                                                                <div key={d.id_diagnostico} className="rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-700 p-3">
+                                                                    <p className="text-sm text-slate-700 dark:text-slate-200">{d.descripcion}</p>
+                                                                    <p className="text-xs text-slate-400 mt-1">{formatDate(d.fecha)}</p>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    <div className="flex gap-2">
+                                                        <input type="text" placeholder="Nuevo diagnostico..." value={nuevoDiagnostico} onChange={(e) => setNuevoDiagnostico(e.target.value)} className={`flex-1 px-3 py-2 text-sm ${inp}`} />
+                                                        <button onClick={() => handleAgregarDiagnostico(p.id_paciente)} disabled={savingDiagnostico} className="text-xs font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white px-4 py-2 rounded-lg">
+                                                            {savingDiagnostico ? "..." : "Agregar"}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     );
                                 })}
@@ -306,7 +458,7 @@ export default function DashboardMedico() {
                                                         <div className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs flex-shrink-0 ${avatarColor(p.id_paciente)}`}>{initials(p.nombre, p.apellido)}</div>
                                                         <div>
                                                             <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{p.nombre} {p.apellido}</p>
-                                                            <p className="text-xs text-slate-400">DNI {p.dni}{p.obra_social ? ` · ${p.obra_social}` : ""}</p>
+                                                            <p className="text-xs text-slate-400">DNI {p.dni}{p.obra_social ? ` - ${p.obra_social}` : ""}</p>
                                                         </div>
                                                     </button>
                                                 ))}
@@ -315,7 +467,7 @@ export default function DashboardMedico() {
                                     </>
                                 )}
                             </div>
-                            <p className="text-xs text-slate-400 mt-1.5">Podés recetar a cualquier paciente registrado. ¿No está? <button onClick={() => setShowModalPaciente(true)} className="text-blue-600 hover:text-blue-800 font-medium">Agregarlo ahora</button></p>
+                            <p className="text-xs text-slate-400 mt-1.5">Podes recetar a cualquier paciente registrado. No esta? <button onClick={() => setShowModalPaciente(true)} className="text-blue-600 hover:text-blue-800 font-medium">Agregarlo ahora</button></p>
                         </div>
                         <div>
                             <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2 uppercase tracking-wide">Medicamentos</label>
@@ -327,7 +479,7 @@ export default function DashboardMedico() {
                                             {formItems.length > 1 && <button onClick={() => removeItem(i)} className="text-slate-300 hover:text-red-400"><Trash2 size={14} /></button>}
                                         </div>
                                         <select value={item.id_medicamento ?? ""} onChange={(e) => updateItem(i, "id_medicamento", e.target.value ? Number(e.target.value) : null)} className={`w-full px-3 py-2 rounded-lg text-sm ${inp}`}>
-                                            <option value="">Seleccioná un medicamento...</option>
+                                            <option value="">Selecciona un medicamento...</option>
                                             {medicamentos.map((m) => <option key={m.id_medicamento} value={m.id_medicamento}>{m.nombre_generico}{m.nombre_comercial ? ` (${m.nombre_comercial})` : ""}</option>)}
                                         </select>
                                         <div className="flex gap-2">
@@ -375,7 +527,7 @@ export default function DashboardMedico() {
                                                         <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm">{r.pacientes.nombre} {r.pacientes.apellido}</p>
                                                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${badge.color}`}>{badge.label}</span>
                                                     </div>
-                                                    <p className="text-xs text-slate-400 mt-0.5">Receta #{idx + 1} · {formatDate(r.fecha_emision)} · {totalItems} medicamento{totalItems > 1 ? "s" : ""} · {entregados}/{totalItems} entregados</p>
+                                                    <p className="text-xs text-slate-400 mt-0.5">Receta #{idx + 1} - {formatDate(r.fecha_emision)} - {totalItems} medicamento{totalItems > 1 ? "s" : ""} - {entregados}/{totalItems} entregados</p>
                                                 </div>
                                                 {isOpen ? <ChevronUp size={16} className="text-slate-400 flex-shrink-0" /> : <ChevronDown size={16} className="text-slate-400 flex-shrink-0" />}
                                             </button>
@@ -387,12 +539,16 @@ export default function DashboardMedico() {
                                                                 <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${it.entregado ? "bg-green-400" : "bg-amber-400"}`} />
                                                                 <div className="flex-1 min-w-0">
                                                                     <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{it.medicamentos.nombre_generico}{it.medicamentos.nombre_comercial && <span className="text-slate-400 font-normal ml-1 text-xs">({it.medicamentos.nombre_comercial})</span>}</p>
-                                                                    <p className="text-xs text-slate-400">Cantidad: {it.cantidad}{it.indicaciones ? ` · ${it.indicaciones}` : ""}</p>
+                                                                    <p className="text-xs text-slate-400">Cantidad: {it.cantidad}{it.indicaciones ? ` - ${it.indicaciones}` : ""}</p>
                                                                 </div>
                                                                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${it.entregado ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>{it.entregado ? "Entregado" : "Pendiente"}</span>
                                                             </div>
                                                         ))}
                                                     </div>
+                                                    <button onClick={() => generarPdfRecetaMedico(r, medicoNombre)} className="mt-3 flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors">
+                                                        <Download size={15} />
+                                                        Descargar PDF
+                                                    </button>
                                                 </div>
                                             )}
                                         </div>

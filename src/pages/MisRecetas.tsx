@@ -1,20 +1,59 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
-import { ArrowLeft, ChevronDown, FileText, Pill, QrCode, CheckCircle2, Clock } from "lucide-react";
+import { ArrowLeft, ChevronDown, FileText, Pill, QrCode, CheckCircle2, Clock, Download } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { jsPDF } from "jspdf";
 
 interface Medico { id_medico: number; nombre: string; apellido: string; especialidad?: string; matricula: string; }
 interface Medicamento { id_medicamento: number; nombre_generico: string; nombre_comercial: string | null; }
 interface RecetaItem { id_item: number; id_receta: number; id_medicamento: number; cantidad: number; indicaciones: string | null; entregado: boolean; }
-interface Receta { id_receta: number; id_medico: number; fecha_emision: string; estado: "activa" | "completada"; }
+interface Receta { id_receta: number; id_medico: number; fecha_emision: string; estado: "activa" | "completada" | "vencida"; }
 
 function iniciales(nombre: string, apellido: string) { return `${nombre[0] ?? ""}${apellido[0] ?? ""}`.toUpperCase(); }
 
-function BadgeEstado({ estado, vencida }: { estado: "activa" | "completada"; vencida?: boolean }) {
-    if (vencida) return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200"><Clock size={11} />Vencida</span>;
+function BadgeEstado({ estado, vencida }: { estado: "activa" | "completada" | "vencida"; vencida?: boolean }) {
+    if (vencida || estado === "vencida") return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200"><Clock size={11} />Vencida</span>;
     return estado === "activa"
         ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200"><Clock size={11} />Activa</span>
         : <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200"><CheckCircle2 size={11} />Completada</span>;
+}
+
+function generarPdfReceta(receta: Receta, medico: Medico | undefined, items: RecetaItem[], getMedicamento: (id: number) => Medicamento | undefined) {
+    const doc = new jsPDF();
+    doc.setFontSize(18);
+    doc.text("FARMATCH", 14, 20);
+    doc.setFontSize(11);
+    doc.text("Receta digital", 14, 27);
+    doc.setLineWidth(0.5);
+    doc.line(14, 32, 196, 32);
+
+    doc.setFontSize(10);
+    doc.text(`Receta N°: ${receta.id_receta}`, 14, 42);
+    doc.text(`Fecha de emision: ${new Date(receta.fecha_emision).toLocaleDateString("es-AR")}`, 14, 49);
+    doc.text(`Estado: ${receta.estado}`, 14, 56);
+
+    if (medico) {
+        doc.text(`Medico: Dr/a. ${medico.nombre} ${medico.apellido}`, 14, 66);
+        doc.text(`Matricula: ${medico.matricula}`, 14, 73);
+    }
+
+    doc.setFontSize(12);
+    doc.text("Medicamentos:", 14, 87);
+    doc.setFontSize(10);
+    let y = 95;
+    items.forEach((item, i) => {
+        const med = getMedicamento(item.id_medicamento);
+        doc.text(`${i + 1}. ${med?.nombre_generico ?? "Medicamento"}${med?.nombre_comercial ? ` (${med.nombre_comercial})` : ""} - Cantidad: ${item.cantidad}`, 14, y);
+        y += 6;
+        if (item.indicaciones) { doc.text(`   ${item.indicaciones}`, 14, y); y += 6; }
+        doc.text(`   Estado: ${item.entregado ? "Entregado" : "Pendiente"}`, 14, y);
+        y += 9;
+    });
+
+    doc.setFontSize(8);
+    doc.text(`ID de validacion: farmatch-receta-${receta.id_receta}`, 14, 285);
+
+    doc.save(`receta-farmatch-${receta.id_receta}.pdf`);
 }
 
 export default function MisRecetas() {
@@ -56,6 +95,7 @@ export default function MisRecetas() {
 
     const activas = recetas.filter(r => r.estado === "activa");
     const completadas = recetas.filter(r => r.estado === "completada");
+    const vencidas = recetas.filter(r => r.estado === "vencida");
 
     return (
         <div className="min-h-screen bg-[#F8FAFC] dark:bg-slate-900">
@@ -66,7 +106,7 @@ export default function MisRecetas() {
                     </button>
                     <div>
                         <h1 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Mis recetas</h1>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">{activas.length} activa{activas.length !== 1 ? "s" : ""} · {completadas.length} completada{completadas.length !== 1 ? "s" : ""}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{activas.length} activa{activas.length !== 1 ? "s" : ""} · {completadas.length} completada{completadas.length !== 1 ? "s" : ""} · {vencidas.length} vencida{vencidas.length !== 1 ? "s" : ""}</p>
                     </div>
                 </div>
             </header>
@@ -101,6 +141,14 @@ export default function MisRecetas() {
                             <section className="space-y-3">
                                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">Completadas</h2>
                                 {completadas.map((receta) => (
+                                    <RecetaCard key={receta.id_receta} receta={receta} index={recetas.indexOf(receta) + 1} medico={getMedico(receta.id_medico)} items={getItems(receta.id_receta)} getMedicamento={getMedicamento} expandida={expandidas.has(receta.id_receta)} qrVisible={qrVisible.has(receta.id_receta)} onToggle={() => toggleExpandida(receta.id_receta)} onToggleQr={(e) => toggleQr(receta.id_receta, e)} />
+                                ))}
+                            </section>
+                        )}
+                        {vencidas.length > 0 && (
+                            <section className="space-y-3">
+                                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">Vencidas</h2>
+                                {vencidas.map((receta) => (
                                     <RecetaCard key={receta.id_receta} receta={receta} index={recetas.indexOf(receta) + 1} medico={getMedico(receta.id_medico)} items={getItems(receta.id_receta)} getMedicamento={getMedicamento} expandida={expandidas.has(receta.id_receta)} qrVisible={qrVisible.has(receta.id_receta)} onToggle={() => toggleExpandida(receta.id_receta)} onToggleQr={(e) => toggleQr(receta.id_receta, e)} />
                                 ))}
                             </section>
@@ -200,11 +248,17 @@ function RecetaCard({ receta, index, medico, items, getMedicamento, expandida, q
                         </div>
                     </div>
 
-                    <div className="px-5 py-4">
+                    <div className="px-5 py-4 flex items-center justify-between flex-wrap gap-3">
                         <button onClick={onToggleQr} className="flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors">
                             <QrCode size={16} />
                             {qrVisible ? "Ocultar QR de validación" : "Mostrar QR de validación"}
                         </button>
+                        <button onClick={() => generarPdfReceta(receta, medico, items, getMedicamento)} className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors">
+                            <Download size={16} />
+                            Descargar PDF
+                        </button>
+                    </div>
+                    <div className="px-5 pb-4">
                         {qrVisible && (
                             <div className="mt-3 flex items-start gap-4">
                                 <img src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=farmatch-receta-${receta.id_receta}&color=1e40af&bgcolor=f0f9ff`} alt={`QR receta ${receta.id_receta}`} className="rounded-xl border border-blue-100 shadow-sm" width={120} height={120} />
