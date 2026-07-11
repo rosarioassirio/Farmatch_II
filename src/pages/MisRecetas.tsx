@@ -182,7 +182,7 @@ function RecetaCard({ receta, index, medico, items, getMedicamento, expandida, q
                             <FileText size={18} className={completada ? "text-green-600" : "text-blue-600"} />
                         </div>
                         <div className="min-w-0">
-                            <p className="font-semibold text-slate-800 dark:text-slate-100">Receta #{index}</p>
+                            <p className="font-semibold text-slate-800 dark:text-slate-100">Receta del {emision}</p>
                             {medico && <p className="text-xs text-slate-400 mt-0.5 truncate">Dr/a. {medico.nombre} {medico.apellido}</p>}
                         </div>
                     </div>

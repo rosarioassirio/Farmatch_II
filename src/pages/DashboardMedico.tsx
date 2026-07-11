@@ -7,7 +7,7 @@ import { jsPDF } from "jspdf";
 import { FarmatchLogoHorizontal } from "../components/FarmatchLogo";
 import { useDarkMode } from "../hooks/useDarkMode";
 
-interface Paciente { id_paciente: number; nombre: string; apellido: string; dni: string; obra_social: string | null; id_medico_cargo: number | null; }
+interface Paciente { id_paciente: number; nombre: string; apellido: string; dni: string; obra_social: string | null; }
 interface Medicamento { id_medicamento: number; nombre_generico: string; nombre_comercial: string | null; }
 interface RecetaItem { id_item: number; id_medicamento: number; cantidad: number; indicaciones: string | null; entregado: boolean; medicamentos: { nombre_generico: string; nombre_comercial: string | null }; }
 interface Receta { id_receta: number; id_paciente: number; estado: "activa" | "completada"; fecha_emision: string; pacientes: { nombre: string; apellido: string; dni: string }; receta_items: RecetaItem[]; }
@@ -66,6 +66,7 @@ export default function DashboardMedico() {
     const { dark, toggle } = useDarkMode();
     const [medicoId, setMedicoId] = useState<number | null>(null);
     const [medicoNombre, setMedicoNombre] = useState("");
+    const [medicoEspecialidad, setMedicoEspecialidad] = useState("");
     const [misPacientes, setMisPacientes] = useState<Paciente[]>([]);
     const [todosPacientes, setTodosPacientes] = useState<Paciente[]>([]);
     const [recetas, setRecetas] = useState<Receta[]>([]);
@@ -108,18 +109,25 @@ export default function DashboardMedico() {
             if (!user) return navigate("/");
             const { data: perfil } = await supabase.from("perfiles").select("ficha_id, rol").eq("id", user.id).single();
             if (!perfil || perfil.rol !== "medico") return navigate("/");
-            const { data: medico } = await supabase.from("medicos").select("id_medico, nombre, apellido").eq("id_medico", perfil.ficha_id).single();
+            const { data: medico } = await supabase.from("medicos").select("id_medico, nombre, apellido, especialidad").eq("id_medico", perfil.ficha_id).single();
             if (!medico) return navigate("/");
             setMedicoId(medico.id_medico);
             setMedicoNombre(`${medico.nombre} ${medico.apellido}`);
+            setMedicoEspecialidad(medico.especialidad ?? "Medico");
             await Promise.all([loadMisPacientes(medico.id_medico), loadTodosPacientes(), loadRecetas(medico.id_medico), loadMedicamentos(), loadDiagnosticos()]);
             setLoading(false);
         })();
     }, []);
 
-    const loadMisPacientes = async (id: number) => { const { data } = await supabase.from("pacientes").select("id_paciente, nombre, apellido, dni, obra_social, id_medico_cargo").eq("id_medico_cargo", id).order("apellido"); setMisPacientes(data ?? []); };
-    const loadTodosPacientes = async () => { const { data } = await supabase.from("pacientes").select("id_paciente, nombre, apellido, dni, obra_social, id_medico_cargo").order("apellido"); setTodosPacientes(data ?? []); };
+    const loadMisPacientes = async (id: number) => {
+        const { data: asignaciones } = await supabase.from("paciente_medico").select("id_paciente, especialidad").eq("id_medico", id);
+        if (!asignaciones || asignaciones.length === 0) { setMisPacientes([]); return; }
+        const idsPacientes = asignaciones.map((a: any) => a.id_paciente);
+        const { data } = await supabase.from("pacientes").select("id_paciente, nombre, apellido, dni, obra_social").in("id_paciente", idsPacientes).order("apellido");
+        setMisPacientes(data ?? []);
+    };
 
+    const loadTodosPacientes = async () => { const { data } = await supabase.from("pacientes").select("id_paciente, nombre, apellido, dni, obra_social").order("apellido"); setTodosPacientes(data ?? []); };
     const loadRecetas = async (id: number) => {
         const { data: recetasData, error: err1 } = await supabase.from("recetas").select("id_receta, id_paciente, id_medico, estado, fecha_emision").eq("id_medico", id).order("fecha_emision", { ascending: false });
         if (err1 || !recetasData?.length) { setRecetas([]); return; }
@@ -142,15 +150,26 @@ export default function DashboardMedico() {
         if (!newNombre.trim() || !newApellido.trim() || !newDni.trim()) return showToast("Nombre, apellido y DNI son obligatorios.", "err");
         setSavingPaciente(true);
         try {
+            const { data: existente } = await supabase.from("pacientes").select("id_paciente, nombre, apellido").eq("dni", newDni.trim()).maybeSingle();
+            if (existente) {
+                const { data: yaAsignado } = await supabase.from("paciente_medico").select("id").eq("id_paciente", existente.id_paciente).eq("id_medico", medicoId).maybeSingle();
+                if (yaAsignado) { showToast("Ese paciente ya esta a tu cargo.", "err"); return; }
+                const { error: errInsert } = await supabase.from("paciente_medico").insert({ id_paciente: existente.id_paciente, id_medico: medicoId, especialidad: medicoEspecialidad });
+                if (errInsert) throw errInsert;
+                showToast(`Paciente ${existente.nombre} ${existente.apellido} asignado a tu cargo.`, "ok");
+                setShowModalPaciente(false); setNewNombre(""); setNewApellido(""); setNewDni(""); setNewObraSocial("");
+                await Promise.all([loadMisPacientes(medicoId!), loadTodosPacientes()]);
+                return;
+            }
             const { data, error } = await supabase.from("pacientes").insert({
                 nombre: newNombre.trim(),
                 apellido: newApellido.trim(),
                 dni: newDni.trim(),
                 email: `${newDni.trim()}@farmatch.temp`,
                 obra_social: newObraSocial.trim() || null,
-                id_medico_cargo: medicoId
             }).select().single();
             if (error) throw error;
+            await supabase.from("paciente_medico").insert({ id_paciente: data.id_paciente, id_medico: medicoId, especialidad: medicoEspecialidad });
             showToast(`Paciente ${data.nombre} ${data.apellido} agregado.`, "ok");
             setShowModalPaciente(false); setNewNombre(""); setNewApellido(""); setNewDni(""); setNewObraSocial("");
             await Promise.all([loadMisPacientes(medicoId!), loadTodosPacientes()]);
@@ -326,7 +345,7 @@ export default function DashboardMedico() {
                         </button>
                         <div className="text-right hidden sm:block">
                             <p className="text-sm font-semibold text-slate-700 dark:text-slate-100">Dr. {medicoNombre}</p>
-                            <p className="text-xs text-slate-400">Medico</p>
+                            <p className="text-xs text-slate-400">Medico {medicoEspecialidad}</p>
                         </div>
                         <button onClick={handleLogout} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-red-500 transition px-2 py-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20">
                             <LogOut size={15} /><span className="hidden sm:inline">Salir</span>
@@ -390,7 +409,7 @@ export default function DashboardMedico() {
                                                     <p className="text-xs text-slate-400 mt-0.5">DNI {p.dni}{p.obra_social ? ` - ${p.obra_social}` : ""}</p>
                                                     {recs.length > 0 && (
                                                         <div className="mt-2 flex flex-wrap gap-1.5">
-                                                            {recs.slice(0, 3).map((r, idx) => { const badge = getBadgeReceta(r.fecha_emision, r.estado); return <span key={r.id_receta} className={`text-xs px-2 py-0.5 rounded-full font-medium border ${badge.color}`}>Receta #{idx + 1} - {badge.label}</span>; })}
+                                                            {recs.slice(0, 3).map((r) => { const badge = getBadgeReceta(r.fecha_emision, r.estado); return <span key={r.id_receta} className={`text-xs px-2 py-0.5 rounded-full font-medium border ${badge.color}`}>{formatDate(r.fecha_emision)} - {badge.label}</span>; })}
                                                             {recs.length > 3 && <span className="text-xs text-slate-400">+{recs.length - 3} mas</span>}
                                                         </div>
                                                     )}
@@ -513,7 +532,7 @@ export default function DashboardMedico() {
                             <div className={`${card} p-8 text-center`}><FileText size={32} className="text-slate-300 mx-auto mb-2" /><p className="text-slate-400 text-sm">No hay recetas que coincidan.</p></div>
                         ) : (
                             <div className="space-y-3">
-                                {filteredRecetas.map((r, idx) => {
+                                {filteredRecetas.map((r) => {
                                     const isOpen = expandedReceta === r.id_receta;
                                     const totalItems = r.receta_items.length;
                                     const entregados = r.receta_items.filter((it) => it.entregado).length;
@@ -527,7 +546,7 @@ export default function DashboardMedico() {
                                                         <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm">{r.pacientes.nombre} {r.pacientes.apellido}</p>
                                                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${badge.color}`}>{badge.label}</span>
                                                     </div>
-                                                    <p className="text-xs text-slate-400 mt-0.5">Receta #{idx + 1} - {formatDate(r.fecha_emision)} - {totalItems} medicamento{totalItems > 1 ? "s" : ""} - {entregados}/{totalItems} entregados</p>
+                                                    <p className="text-xs text-slate-400 mt-0.5">{formatDate(r.fecha_emision)} - {totalItems} medicamento{totalItems > 1 ? "s" : ""} - {entregados}/{totalItems} entregados</p>
                                                 </div>
                                                 {isOpen ? <ChevronUp size={16} className="text-slate-400 flex-shrink-0" /> : <ChevronDown size={16} className="text-slate-400 flex-shrink-0" />}
                                             </button>
