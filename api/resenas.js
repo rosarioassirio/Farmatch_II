@@ -1,4 +1,4 @@
-const { MongoClient } = require("mongodb");
+import { MongoClient } from "mongodb";
 
 let cachedClient = null;
 
@@ -10,7 +10,7 @@ async function getClient() {
     return client;
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -49,4 +49,4 @@ module.exports = async function handler(req, res) {
     } catch (error) {
         return res.status(500).json({ error: "Error de servidor", detalle: String(error) });
     }
-};
+}
