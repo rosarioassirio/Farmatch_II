@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { FarmatchLogoHorizontal } from "../components/FarmatchLogo";
 import ChatIA from "../components/ChatIA";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, LineChart, Line } from "recharts";
-import { LogOut, Sun, Moon } from "lucide-react";
+import { LogOut, Sun, Moon, Star } from "lucide-react";
 import { useDarkMode } from "../hooks/useDarkMode";
 
 const ESTADOS = [
@@ -18,12 +18,22 @@ const SIGUIENTE_ESTADO: Record<string, string> = { pendiente: "preparando", prep
 const COLORES = ["#3b82f6", "#60a5fa", "#93c5fd", "#1d4ed8", "#ef4444", "#a5b4fc"];
 const LIMITE_STOCK_BAJO = 5;
 const AVATAR_COLORES = ["bg-blue-400", "bg-blue-500", "bg-blue-600", "bg-blue-700", "bg-indigo-500", "bg-sky-500"];
-type Vista = "pedidos" | "estadisticas" | "stock";
+type Vista = "pedidos" | "estadisticas" | "stock" | "resenas";
 
 function Avatar({ nombre, apellido }: { nombre: string; apellido: string }) {
     const iniciales = `${nombre?.[0] ?? ""}${apellido?.[0] ?? ""}`.toUpperCase();
     const color = AVATAR_COLORES[(nombre?.charCodeAt(0) ?? 0) % AVATAR_COLORES.length];
     return <div className={`${color} flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold text-white`}>{iniciales}</div>;
+}
+
+function Estrellas({ calificacion }: { calificacion: number }) {
+    return (
+        <div className="flex gap-0.5">
+            {[1, 2, 3, 4, 5].map((n) => (
+                <Star key={n} size={14} className={n <= calificacion ? "text-amber-400 fill-amber-400" : "text-slate-300 dark:text-slate-600"} />
+            ))}
+        </div>
+    );
 }
 
 export default function DashboardFarmacia() {
@@ -40,8 +50,6 @@ export default function DashboardFarmacia() {
     const [reservasPorDia, setReservasPorDia] = useState<any[]>([]);
     const [estadosPie, setEstadosPie] = useState<any[]>([]);
     const [tiempoPromedio, setTiempoPromedio] = useState<number | null>(null);
-    const [totalComisiones, setTotalComisiones] = useState<number>(0);
-    const [totalFacturado, setTotalFacturado] = useState<number>(0);
     const [loadingStats, setLoadingStats] = useState(true);
     const [stock, setStock] = useState<any[]>([]);
     const [loadingStock, setLoadingStock] = useState(true);
@@ -59,6 +67,11 @@ export default function DashboardFarmacia() {
     const [notaAbierta, setNotaAbierta] = useState<number | null>(null);
     const [textoNota, setTextoNota] = useState("");
     const [guardandoNota, setGuardandoNota] = useState(false);
+    const [totalComisiones, setTotalComisiones] = useState<number>(0);
+    const [totalFacturado, setTotalFacturado] = useState<number>(0);
+    const [resenas, setResenas] = useState<any[]>([]);
+    const [promedioResenas, setPromedioResenas] = useState<number | null>(null);
+    const [loadingResenas, setLoadingResenas] = useState(true);
 
     const card = "rounded-2xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 shadow-sm";
     const input = "rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-400";
@@ -81,8 +94,20 @@ export default function DashboardFarmacia() {
 
     useEffect(() => {
         if (!idFarmacia) return;
-        cargarReservas(); cargarEstadisticas(); cargarStock(); cargarMedicamentosDisponibles();
+        cargarReservas(); cargarEstadisticas(); cargarStock(); cargarMedicamentosDisponibles(); cargarResenas();
     }, [idFarmacia]);
+
+    async function cargarResenas() {
+        if (!idFarmacia) return;
+        setLoadingResenas(true);
+        try {
+            const resp = await fetch(`/api/resenas?id_farmacia=${idFarmacia}`);
+            const data = await resp.json();
+            setResenas(data.resenas ?? []);
+            setPromedioResenas(data.promedio);
+        } catch { setResenas([]); setPromedioResenas(null); }
+        setLoadingResenas(false);
+    }
 
     async function cargarMedicamentosDisponibles() {
         const { data } = await supabase.from("medicamentos").select("*").order("nombre_generico");
@@ -111,7 +136,7 @@ export default function DashboardFarmacia() {
     }
 
     async function eliminarStock(idStock: number) {
-        if (!confirm("¿Eliminar este medicamento del stock?")) return;
+        if (!confirm("Eliminar este medicamento del stock?")) return;
         const { error } = await supabase.from("stock").delete().eq("id_stock", idStock);
         if (!error) setStock((prev) => prev.filter((s) => s.id_stock !== idStock));
     }
@@ -179,7 +204,7 @@ export default function DashboardFarmacia() {
         const siguiente = SIGUIENTE_ESTADO[reserva.estado];
         if (!siguiente) return;
         const { error } = await supabase.from("reservas").update({ estado: siguiente }).eq("id_reserva", reserva.id_reserva);
-        if (error) { console.error("Error al avanzar estado:", error); alert("Error: " + error.message); return; }
+        if (error) return;
         setReservas((prev) => prev.map((r) => r.id_reserva === reserva.id_reserva ? { ...r, estado: siguiente } : r));
         if (siguiente === "entregada") {
             const { data: reservaItems } = await supabase.from("reserva_items").select("id_item").eq("id_reserva", reserva.id_reserva);
@@ -204,7 +229,7 @@ export default function DashboardFarmacia() {
     }
 
     async function cancelarReserva(reserva: any) {
-        if (!confirm(`¿Cancelar la reserva de ${reserva.paciente?.nombre} ${reserva.paciente?.apellido}?`)) return;
+        if (!confirm(`Cancelar la reserva de ${reserva.paciente?.nombre} ${reserva.paciente?.apellido}?`)) return;
         const { error } = await supabase.from("reservas").update({ estado: "cancelada" }).eq("id_reserva", reserva.id_reserva);
         if (!error) setReservas((prev) => prev.map((r) => r.id_reserva === reserva.id_reserva ? { ...r, estado: "cancelada" } : r));
     }
@@ -248,10 +273,11 @@ export default function DashboardFarmacia() {
 
             <main className="mx-auto max-w-5xl p-8">
                 <div className="mb-8 flex gap-3 flex-wrap">
-                    {[{ key: "pedidos", label: "Pedidos recibidos" }, { key: "estadisticas", label: "Estadísticas" }, { key: "stock", label: "Mi Stock" }].map((tab) => (
+                    {[{ key: "pedidos", label: "Pedidos recibidos" }, { key: "estadisticas", label: "Estadisticas" }, { key: "stock", label: "Mi Stock" }, { key: "resenas", label: "Resenas" }].map((tab) => (
                         <button key={tab.key} onClick={() => setVista(tab.key as Vista)} className={`rounded-xl px-6 py-3 font-semibold transition ${vista === tab.key ? "bg-blue-600 text-white shadow-md shadow-blue-200" : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700"}`}>
                             {tab.label}
                             {tab.key === "stock" && stockBajos.length > 0 && <span className="ml-2 rounded-full bg-red-500 px-2 py-0.5 text-xs text-white">{stockBajos.length}</span>}
+                            {tab.key === "resenas" && promedioResenas !== null && <span className="ml-2 rounded-full bg-amber-400 px-2 py-0.5 text-xs text-white">{promedioResenas.toFixed(1)}</span>}
                         </button>
                     ))}
                 </div>
@@ -278,7 +304,7 @@ export default function DashboardFarmacia() {
                             ))}
                         </div>
                         {loading ? <p className="text-slate-400">Cargando pedidos...</p> : reservasFiltradas.length === 0 ? (
-                            <div className={`${card} p-12 text-center`}><p className="text-lg font-semibold text-slate-600 dark:text-slate-300">{filtroEstado === "todos" ? "No hay pedidos todavía" : `No hay pedidos "${getEstado(filtroEstado).label}"`}</p></div>
+                            <div className={`${card} p-12 text-center`}><p className="text-lg font-semibold text-slate-600 dark:text-slate-300">{filtroEstado === "todos" ? "No hay pedidos todavia" : `No hay pedidos "${getEstado(filtroEstado).label}"`}</p></div>
                         ) : (
                             <div className="space-y-3">
                                 {reservasFiltradas.map((r) => {
@@ -292,7 +318,7 @@ export default function DashboardFarmacia() {
                                                     <div className="flex items-start justify-between gap-2">
                                                         <div>
                                                             <p className="font-bold text-slate-800 dark:text-slate-100">{r.paciente?.nombre} {r.paciente?.apellido}</p>
-                                                            <p className="text-sm text-slate-400">DNI {r.paciente?.dni} · {r.paciente?.obra_social} · {formatFecha(r.fecha)}</p>
+                                                            <p className="text-sm text-slate-400">DNI {r.paciente?.dni} - {r.paciente?.obra_social} - {formatFecha(r.fecha)}</p>
                                                         </div>
                                                         <div className="flex items-center gap-2 flex-shrink-0">
                                                             {r.estado === "cancelada" ? (
@@ -301,7 +327,7 @@ export default function DashboardFarmacia() {
                                                                 <span className="rounded-full px-3 py-1 text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">Entregada</span>
                                                             ) : (
                                                                 <>
-                                                                    {siguiente && <button onClick={() => avanzarEstado(r)} className="rounded-xl bg-blue-600 px-3 py-1.5 text-xs text-white font-medium hover:bg-blue-700 transition">→ {getEstado(siguiente).label}</button>}
+                                                                    {siguiente && <button onClick={() => avanzarEstado(r)} className="rounded-xl bg-blue-600 px-3 py-1.5 text-xs text-white font-medium hover:bg-blue-700 transition">{getEstado(siguiente).label}</button>}
                                                                     <button onClick={() => cancelarReserva(r)} className="rounded-xl bg-red-50 px-3 py-1.5 text-xs text-red-600 font-medium hover:bg-red-100 transition">Cancelar</button>
                                                                 </>
                                                             )}
@@ -351,20 +377,8 @@ export default function DashboardFarmacia() {
 
                 {vista === "estadisticas" && (
                     <div className="space-y-6">
-                        {loadingStats ? <p className="text-slate-400">Cargando estadísticas...</p> : (
+                        {loadingStats ? <p className="text-slate-400">Cargando estadisticas...</p> : (
                             <>
-                                {tiempoPromedio !== null && (
-                                    <div className={`${card} p-6 flex items-center gap-6`}>
-                                        <div>
-                                            <p className="text-4xl font-bold text-blue-600">{tiempoPromedio < 48 ? `${tiempoPromedio}h` : `${Math.round(tiempoPromedio / 24)}d`}</p>
-                                            <p className="text-sm font-medium text-slate-700 dark:text-slate-200 mt-1">Tiempo promedio por pedido</p>
-                                            <p className="text-xs text-slate-400">Desde que se hace la reserva hasta que se entrega</p>
-                                        </div>
-                                        <div className="ml-auto text-right">
-                                            <p className="text-sm text-slate-500 dark:text-slate-400">{contadores.entregada} pedido{contadores.entregada !== 1 ? "s" : ""} entregado{contadores.entregada !== 1 ? "s" : ""}</p>
-                                        </div>
-                                    </div>
-                                )}
                                 {totalFacturado > 0 && (
                                     <div className={`${card} p-6 flex items-center gap-6 border-l-4 border-blue-500`}>
                                         <div>
@@ -378,8 +392,20 @@ export default function DashboardFarmacia() {
                                         </div>
                                     </div>
                                 )}
+                                {tiempoPromedio !== null && (
+                                    <div className={`${card} p-6 flex items-center gap-6`}>
+                                        <div>
+                                            <p className="text-4xl font-bold text-blue-600">{tiempoPromedio < 48 ? `${tiempoPromedio}h` : `${Math.round(tiempoPromedio / 24)}d`}</p>
+                                            <p className="text-sm font-medium text-slate-700 dark:text-slate-200 mt-1">Tiempo promedio por pedido</p>
+                                            <p className="text-xs text-slate-400">Desde que se hace la reserva hasta que se entrega</p>
+                                        </div>
+                                        <div className="ml-auto text-right">
+                                            <p className="text-sm text-slate-500 dark:text-slate-400">{contadores.entregada} pedido{contadores.entregada !== 1 ? "s" : ""} entregado{contadores.entregada !== 1 ? "s" : ""}</p>
+                                        </div>
+                                    </div>
+                                )}
                                 <div className={`${card} p-6`}>
-                                    <h2 className="mb-1 text-base font-bold text-slate-800 dark:text-slate-100">Reservas últimos 7 días</h2>
+                                    <h2 className="mb-1 text-base font-bold text-slate-800 dark:text-slate-100">Reservas ultimos 7 dias</h2>
                                     <p className="mb-4 text-sm text-slate-400">Actividad de pedidos en tu farmacia</p>
                                     <ResponsiveContainer width="100%" height={200}>
                                         <LineChart data={reservasPorDia}>
@@ -407,8 +433,8 @@ export default function DashboardFarmacia() {
                                         ) : <p className="text-slate-400 text-sm">Sin datos</p>}
                                     </div>
                                     <div className={`${card} p-6`}>
-                                        <h2 className="mb-1 text-base font-bold text-slate-800 dark:text-slate-100">Más buscados</h2>
-                                        <p className="mb-4 text-sm text-slate-400">Medicamentos con más búsquedas</p>
+                                        <h2 className="mb-1 text-base font-bold text-slate-800 dark:text-slate-100">Mas buscados</h2>
+                                        <p className="mb-4 text-sm text-slate-400">Medicamentos con mas busquedas</p>
                                         {medsMasBuscados.length > 0 ? (
                                             <ResponsiveContainer width="100%" height={200}>
                                                 <BarChart data={medsMasBuscados} layout="vertical">
@@ -416,7 +442,7 @@ export default function DashboardFarmacia() {
                                                     <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                                                     <YAxis type="category" dataKey="nombre" width={100} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
                                                     <Tooltip contentStyle={tooltipStyle} />
-                                                    <Bar dataKey="cantidad" fill="#3b82f6" radius={[0, 6, 6, 0]} name="Búsquedas" />
+                                                    <Bar dataKey="cantidad" fill="#3b82f6" radius={[0, 6, 6, 0]} name="Busquedas" />
                                                 </BarChart>
                                             </ResponsiveContainer>
                                         ) : <p className="text-slate-400 text-sm">Sin datos</p>}
@@ -446,7 +472,7 @@ export default function DashboardFarmacia() {
                     <div>
                         {stockBajos.length > 0 && (
                             <div className="mb-6 rounded-2xl border-l-4 border-red-500 bg-red-50 dark:bg-red-900/20 p-4">
-                                <p className="font-semibold text-red-700 dark:text-red-400">{stockBajos.length} medicamento{stockBajos.length > 1 ? "s" : ""} con stock bajo (≤{LIMITE_STOCK_BAJO} unidades)</p>
+                                <p className="font-semibold text-red-700 dark:text-red-400">{stockBajos.length} medicamento{stockBajos.length > 1 ? "s" : ""} con stock bajo (menos o igual a {LIMITE_STOCK_BAJO} unidades)</p>
                                 <p className="mt-1 text-sm text-red-500">{stockBajos.map((s) => s.medicamento?.nombre_generico).join(", ")}</p>
                             </div>
                         )}
@@ -462,8 +488,8 @@ export default function DashboardFarmacia() {
                                 <h3 className="mb-3 font-semibold text-blue-700 dark:text-blue-400">Agregar medicamento al stock</h3>
                                 <div className="flex gap-3 flex-wrap">
                                     <select value={nuevoMed} onChange={(e) => setNuevoMed(e.target.value)} className={`flex-1 p-3 min-w-[200px] ${input}`}>
-                                        <option value="">Seleccioná un medicamento</option>
-                                        {medicamentosDisponibles.map((m) => <option key={m.id_medicamento} value={m.id_medicamento}>{m.nombre_generico} — {m.nombre_comercial}</option>)}
+                                        <option value="">Selecciona un medicamento</option>
+                                        {medicamentosDisponibles.map((m) => <option key={m.id_medicamento} value={m.id_medicamento}>{m.nombre_generico} - {m.nombre_comercial}</option>)}
                                     </select>
                                     <input type="number" placeholder="Cantidad" value={nuevaCantidad} onChange={(e) => setNuevaCantidad(e.target.value)} className={`w-28 p-3 ${input}`} />
                                     <input type="number" placeholder="Precio $" value={nuevoPrecio} onChange={(e) => setNuevoPrecio(e.target.value)} className={`w-32 p-3 ${input}`} />
@@ -510,6 +536,46 @@ export default function DashboardFarmacia() {
                                         </div>
                                     );
                                 })}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {vista === "resenas" && (
+                    <div className="space-y-4">
+                        {promedioResenas !== null && (
+                            <div className={`${card} p-6 flex items-center gap-6 border-l-4 border-amber-400`}>
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <p className="text-4xl font-bold text-slate-800 dark:text-slate-100">{promedioResenas.toFixed(1)}</p>
+                                        <Estrellas calificacion={Math.round(promedioResenas)} />
+                                    </div>
+                                    <p className="text-sm font-medium text-slate-700 dark:text-slate-200 mt-1">Calificacion promedio</p>
+                                    <p className="text-xs text-slate-400">Basado en {resenas.length} resena{resenas.length !== 1 ? "s" : ""}</p>
+                                </div>
+                            </div>
+                        )}
+                        {loadingResenas ? (
+                            <p className="text-slate-400">Cargando resenas...</p>
+                        ) : resenas.length === 0 ? (
+                            <div className={`${card} p-12 text-center`}>
+                                <Star size={32} className="text-slate-300 mx-auto mb-2" />
+                                <p className="text-slate-500 dark:text-slate-400 text-sm">Todavia no tenes resenas de pacientes.</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                {resenas.map((r: any, i: number) => (
+                                    <div key={i} className={`${card} p-4`}>
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div>
+                                                <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm">{r.nombre_paciente}</p>
+                                                <p className="text-xs text-slate-400">{new Date(r.fecha).toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "numeric" })}</p>
+                                            </div>
+                                            <Estrellas calificacion={r.calificacion} />
+                                        </div>
+                                        {r.comentario && <p className="text-sm text-slate-600 dark:text-slate-300 mt-2">{r.comentario}</p>}
+                                    </div>
+                                ))}
                             </div>
                         )}
                     </div>
