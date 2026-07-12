@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
-import { ArrowLeft, Clock, CheckCircle, Package, XCircle, AlertTriangle, QrCode } from "lucide-react";
+import { ArrowLeft, Clock, CheckCircle, Package, XCircle, AlertTriangle, QrCode, Star } from "lucide-react";
 
 type EstadoReserva = "pendiente" | "preparando" | "lista" | "entregada" | "cancelada";
 
@@ -56,6 +56,13 @@ export default function MisReservas() {
     const [cancelando, setCancelando] = useState<number | null>(null);
     const [confirmarCancelar, setConfirmarCancelar] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [idPaciente, setIdPaciente] = useState<number | null>(null);
+    const [nombrePaciente, setNombrePaciente] = useState<string>("");
+    const [resenaAbierta, setResenaAbierta] = useState<number | null>(null);
+    const [calificacionSel, setCalificacionSel] = useState<number>(0);
+    const [comentarioResena, setComentarioResena] = useState("");
+    const [enviandoResena, setEnviandoResena] = useState(false);
+    const [resenasEnviadas, setResenasEnviadas] = useState<Set<number>>(new Set());
 
     useEffect(() => { fetchReservas(); }, []);
 
@@ -66,6 +73,8 @@ export default function MisReservas() {
             if (!user) { navigate("/login"); return; }
             const { data: perfil } = await supabase.from("perfiles").select("ficha_id").eq("id", user.id).single();
             if (!perfil) throw new Error("Perfil no encontrado");
+            const { data: pacienteData } = await supabase.from("pacientes").select("id_paciente, nombre, apellido").eq("id_paciente", perfil.ficha_id).single();
+            if (pacienteData) { setIdPaciente(pacienteData.id_paciente); setNombrePaciente(`${pacienteData.nombre} ${pacienteData.apellido}`); }
             const { data: reservasData, error: err } = await supabase.from("reservas").select("id_reserva, id_farmacia, fecha, estado, nota_interna").eq("id_paciente", perfil.ficha_id).order("fecha", { ascending: false });
             if (err) throw err;
             if (!reservasData || reservasData.length === 0) { setReservas([]); return; }
@@ -94,6 +103,31 @@ export default function MisReservas() {
             setReservas(prev => prev.map(r => r.id_reserva === id_reserva ? { ...r, estado: "cancelada" } : r));
         } catch { setError("No se pudo cancelar la reserva. Intenta de nuevo."); }
         finally { setCancelando(null); setConfirmarCancelar(null); }
+    }
+
+    async function enviarResena(id_farmacia: number, id_reserva: number) {
+        if (!idPaciente || calificacionSel === 0) return;
+        setEnviandoResena(true);
+        try {
+            const resp = await fetch("/api/resenas", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    id_farmacia,
+                    id_paciente: idPaciente,
+                    nombre_paciente: nombrePaciente,
+                    calificacion: calificacionSel,
+                    comentario: comentarioResena,
+                }),
+            });
+            if (!resp.ok) throw new Error();
+            setResenasEnviadas(prev => new Set(prev).add(id_reserva));
+            setResenaAbierta(null); setCalificacionSel(0); setComentarioResena("");
+        } catch {
+            setError("No se pudo enviar la resena. Intenta de nuevo.");
+        } finally {
+            setEnviandoResena(false);
+        }
     }
 
     const activas = reservas.filter(r => !["entregada", "cancelada"].includes(r.estado));
@@ -137,13 +171,13 @@ export default function MisReservas() {
                         {activas.length > 0 && (
                             <section className="space-y-3">
                                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">Activas</h2>
-                                {activas.map(reserva => <ReservaCard key={reserva.id_reserva} reserva={reserva} onCancelar={() => setConfirmarCancelar(reserva.id_reserva)} cancelando={cancelando === reserva.id_reserva} />)}
+                                {activas.map(reserva => <ReservaCard key={reserva.id_reserva} reserva={reserva} onCancelar={() => setConfirmarCancelar(reserva.id_reserva)} cancelando={cancelando === reserva.id_reserva} resenaAbierta={resenaAbierta === reserva.id_reserva} onAbrirResena={() => setResenaAbierta(reserva.id_reserva)} onCerrarResena={() => { setResenaAbierta(null); setCalificacionSel(0); setComentarioResena(""); }} calificacionSel={calificacionSel} setCalificacionSel={setCalificacionSel} comentarioResena={comentarioResena} setComentarioResena={setComentarioResena} onEnviarResena={() => enviarResena(reserva.id_farmacia, reserva.id_reserva)} enviandoResena={enviandoResena} resenaYaEnviada={resenasEnviadas.has(reserva.id_reserva)} />)}
                             </section>
                         )}
                         {historial.length > 0 && (
                             <section className="space-y-3">
                                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">Historial</h2>
-                                {historial.map(reserva => <ReservaCard key={reserva.id_reserva} reserva={reserva} onCancelar={() => { }} cancelando={false} />)}
+                                {historial.map(reserva => <ReservaCard key={reserva.id_reserva} reserva={reserva} onCancelar={() => { }} cancelando={false} resenaAbierta={resenaAbierta === reserva.id_reserva} onAbrirResena={() => setResenaAbierta(reserva.id_reserva)} onCerrarResena={() => { setResenaAbierta(null); setCalificacionSel(0); setComentarioResena(""); }} calificacionSel={calificacionSel} setCalificacionSel={setCalificacionSel} comentarioResena={comentarioResena} setComentarioResena={setComentarioResena} onEnviarResena={() => enviarResena(reserva.id_farmacia, reserva.id_reserva)} enviandoResena={enviandoResena} resenaYaEnviada={resenasEnviadas.has(reserva.id_reserva)} />)}
                             </section>
                         )}
                     </>
@@ -172,7 +206,13 @@ export default function MisReservas() {
     );
 }
 
-function ReservaCard({ reserva, onCancelar, cancelando }: { reserva: Reserva; onCancelar: () => void; cancelando: boolean }) {
+function ReservaCard({ reserva, onCancelar, cancelando, resenaAbierta, onAbrirResena, onCerrarResena, calificacionSel, setCalificacionSel, comentarioResena, setComentarioResena, onEnviarResena, enviandoResena, resenaYaEnviada }: {
+    reserva: Reserva; onCancelar: () => void; cancelando: boolean;
+    resenaAbierta: boolean; onAbrirResena: () => void; onCerrarResena: () => void;
+    calificacionSel: number; setCalificacionSel: (n: number) => void;
+    comentarioResena: string; setComentarioResena: (s: string) => void;
+    onEnviarResena: () => void; enviandoResena: boolean; resenaYaEnviada: boolean;
+}) {
     const [expandida, setExpandida] = useState(false);
     const [qrVisible, setQrVisible] = useState(false);
     const cfg = ESTADO_CONFIG[reserva.estado];
@@ -244,6 +284,37 @@ function ReservaCard({ reserva, onCancelar, cancelando }: { reserva: Reserva; on
                                     ))}
                                 </div>
                             )}
+                        </div>
+                    )}
+                    {esEntregada && !resenaYaEnviada && (
+                        <div className="pt-3 border-t border-slate-100 dark:border-slate-700">
+                            {!resenaAbierta ? (
+                                <button onClick={e => { e.stopPropagation(); onAbrirResena(); }} className="flex items-center gap-2 text-sm font-medium text-amber-600 hover:text-amber-700 transition-colors">
+                                    <Star size={16} />
+                                    Dejar resena de la farmacia
+                                </button>
+                            ) : (
+                                <div className="space-y-3" onClick={e => e.stopPropagation()}>
+                                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Como calificarias tu experiencia?</p>
+                                    <div className="flex gap-1">
+                                        {[1, 2, 3, 4, 5].map(n => (
+                                            <button key={n} onClick={() => setCalificacionSel(n)}>
+                                                <Star size={24} className={n <= calificacionSel ? "text-amber-400 fill-amber-400" : "text-slate-300 dark:text-slate-600"} />
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <textarea value={comentarioResena} onChange={e => setComentarioResena(e.target.value)} placeholder="Comentario opcional..." rows={2} className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                                    <div className="flex gap-2">
+                                        <button onClick={onCerrarResena} className="flex-1 py-2 border border-slate-200 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300">Cancelar</button>
+                                        <button onClick={onEnviarResena} disabled={calificacionSel === 0 || enviandoResena} className="flex-1 py-2 bg-amber-500 text-white rounded-xl text-sm font-semibold hover:bg-amber-600 disabled:opacity-50">{enviandoResena ? "Enviando..." : "Enviar resena"}</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {resenaYaEnviada && (
+                        <div className="flex items-center gap-1.5 text-xs text-amber-600 pt-2 border-t border-slate-100 dark:border-slate-700">
+                            <Star size={13} className="fill-amber-400" />Ya dejaste tu resena. Gracias!
                         </div>
                     )}
                     {esPendiente && (
