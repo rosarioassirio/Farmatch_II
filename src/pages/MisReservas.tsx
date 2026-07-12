@@ -63,6 +63,7 @@ export default function MisReservas() {
     const [comentarioResena, setComentarioResena] = useState("");
     const [enviandoResena, setEnviandoResena] = useState(false);
     const [resenasEnviadas, setResenasEnviadas] = useState<Set<number>>(new Set());
+    const [verificandoResenas, setVerificandoResenas] = useState(true);
 
     useEffect(() => { fetchReservas(); }, []);
 
@@ -77,7 +78,7 @@ export default function MisReservas() {
             if (pacienteData) { setIdPaciente(pacienteData.id_paciente); setNombrePaciente(`${pacienteData.nombre} ${pacienteData.apellido}`); }
             const { data: reservasData, error: err } = await supabase.from("reservas").select("id_reserva, id_farmacia, fecha, estado, nota_interna").eq("id_paciente", perfil.ficha_id).order("fecha", { ascending: false });
             if (err) throw err;
-            if (!reservasData || reservasData.length === 0) { setReservas([]); return; }
+            if (!reservasData || reservasData.length === 0) { setReservas([]); setVerificandoResenas(false); return; }
             const ids_farmacia = [...new Set(reservasData.map((r: any) => r.id_farmacia))];
             const ids_reserva = reservasData.map((r: any) => r.id_reserva);
             const { data: farmaciasData } = await supabase.from("farmacias").select("id_farmacia, nombre, direccion").in("id_farmacia", ids_farmacia);
@@ -90,8 +91,23 @@ export default function MisReservas() {
             const medMap: Record<number, any> = {}; (medicamentosData || []).forEach((m: any) => { medMap[m.id_medicamento] = m; });
             const recetaItemsMap: Record<number, any> = {}; (recetaItemsData || []).forEach((ri: any) => { recetaItemsMap[ri.id_item] = { id_receta: ri.id_receta, cantidad: ri.cantidad, indicaciones: ri.indicaciones, medicamentos: medMap[ri.id_medicamento] || { nombre_generico: "Medicamento", nombre_comercial: null } }; });
             const itemsByReserva: Record<number, any[]> = {}; (reservaItemsData || []).forEach((ri: any) => { if (!itemsByReserva[ri.id_reserva]) itemsByReserva[ri.id_reserva] = []; itemsByReserva[ri.id_reserva].push({ id: ri.id, receta_items: recetaItemsMap[ri.id_item] || { id_receta: 0, cantidad: 1, indicaciones: null, medicamentos: { nombre_generico: "Medicamento", nombre_comercial: null } } }); });
-            setReservas(reservasData.map((r: any) => ({ ...r, farmacias: farmaciasMap[r.id_farmacia] || { nombre: "Farmacia", direccion: "" }, reserva_items: itemsByReserva[r.id_reserva] || [] })));
-        } catch (e: any) { setError(e.message || "Error al cargar reservas"); }
+            const reservasFinal = reservasData.map((r: any) => ({ ...r, farmacias: farmaciasMap[r.id_farmacia] || { nombre: "Farmacia", direccion: "" }, reserva_items: itemsByReserva[r.id_reserva] || [] }));
+            setReservas(reservasFinal);
+
+            const entregadas = reservasFinal.filter((r: any) => r.estado === "entregada");
+            if (entregadas.length > 0) {
+                const yaReseniadas = new Set<number>();
+                await Promise.all(entregadas.map(async (r: any) => {
+                    try {
+                        const resp = await fetch(`/api/resenas?id_reserva=${r.id_reserva}`);
+                        const data = await resp.json();
+                        if (data.ya_reseniada) yaReseniadas.add(r.id_reserva);
+                    } catch { /* si falla, se puede intentar igual */ }
+                }));
+                setResenasEnviadas(yaReseniadas);
+            }
+            setVerificandoResenas(false);
+        } catch (e: any) { setError(e.message || "Error al cargar reservas"); setVerificandoResenas(false); }
         finally { setLoading(false); }
     }
 
@@ -115,16 +131,22 @@ export default function MisReservas() {
                 body: JSON.stringify({
                     id_farmacia,
                     id_paciente: idPaciente,
+                    id_reserva,
                     nombre_paciente: nombrePaciente,
                     calificacion: calificacionSel,
                     comentario: comentarioResena,
                 }),
             });
+            if (resp.status === 409) {
+                setResenasEnviadas(prev => new Set(prev).add(id_reserva));
+                setResenaAbierta(null); setCalificacionSel(0); setComentarioResena("");
+                return;
+            }
             if (!resp.ok) throw new Error();
             setResenasEnviadas(prev => new Set(prev).add(id_reserva));
             setResenaAbierta(null); setCalificacionSel(0); setComentarioResena("");
         } catch {
-            setError("No se pudo enviar la resena. Intenta de nuevo.");
+            setError("No se pudo enviar la reseña. Intenta de nuevo.");
         } finally {
             setEnviandoResena(false);
         }
@@ -171,13 +193,13 @@ export default function MisReservas() {
                         {activas.length > 0 && (
                             <section className="space-y-3">
                                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">Activas</h2>
-                                {activas.map(reserva => <ReservaCard key={reserva.id_reserva} reserva={reserva} onCancelar={() => setConfirmarCancelar(reserva.id_reserva)} cancelando={cancelando === reserva.id_reserva} resenaAbierta={resenaAbierta === reserva.id_reserva} onAbrirResena={() => setResenaAbierta(reserva.id_reserva)} onCerrarResena={() => { setResenaAbierta(null); setCalificacionSel(0); setComentarioResena(""); }} calificacionSel={calificacionSel} setCalificacionSel={setCalificacionSel} comentarioResena={comentarioResena} setComentarioResena={setComentarioResena} onEnviarResena={() => enviarResena(reserva.id_farmacia, reserva.id_reserva)} enviandoResena={enviandoResena} resenaYaEnviada={resenasEnviadas.has(reserva.id_reserva)} />)}
+                                {activas.map(reserva => <ReservaCard key={reserva.id_reserva} reserva={reserva} onCancelar={() => setConfirmarCancelar(reserva.id_reserva)} cancelando={cancelando === reserva.id_reserva} resenaAbierta={resenaAbierta === reserva.id_reserva} onAbrirResena={() => setResenaAbierta(reserva.id_reserva)} onCerrarResena={() => { setResenaAbierta(null); setCalificacionSel(0); setComentarioResena(""); }} calificacionSel={calificacionSel} setCalificacionSel={setCalificacionSel} comentarioResena={comentarioResena} setComentarioResena={setComentarioResena} onEnviarResena={() => enviarResena(reserva.id_farmacia, reserva.id_reserva)} enviandoResena={enviandoResena} resenaYaEnviada={resenasEnviadas.has(reserva.id_reserva)} verificandoResenas={verificandoResenas} />)}
                             </section>
                         )}
                         {historial.length > 0 && (
                             <section className="space-y-3">
                                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">Historial</h2>
-                                {historial.map(reserva => <ReservaCard key={reserva.id_reserva} reserva={reserva} onCancelar={() => { }} cancelando={false} resenaAbierta={resenaAbierta === reserva.id_reserva} onAbrirResena={() => setResenaAbierta(reserva.id_reserva)} onCerrarResena={() => { setResenaAbierta(null); setCalificacionSel(0); setComentarioResena(""); }} calificacionSel={calificacionSel} setCalificacionSel={setCalificacionSel} comentarioResena={comentarioResena} setComentarioResena={setComentarioResena} onEnviarResena={() => enviarResena(reserva.id_farmacia, reserva.id_reserva)} enviandoResena={enviandoResena} resenaYaEnviada={resenasEnviadas.has(reserva.id_reserva)} />)}
+                                {historial.map(reserva => <ReservaCard key={reserva.id_reserva} reserva={reserva} onCancelar={() => { }} cancelando={false} resenaAbierta={resenaAbierta === reserva.id_reserva} onAbrirResena={() => setResenaAbierta(reserva.id_reserva)} onCerrarResena={() => { setResenaAbierta(null); setCalificacionSel(0); setComentarioResena(""); }} calificacionSel={calificacionSel} setCalificacionSel={setCalificacionSel} comentarioResena={comentarioResena} setComentarioResena={setComentarioResena} onEnviarResena={() => enviarResena(reserva.id_farmacia, reserva.id_reserva)} enviandoResena={enviandoResena} resenaYaEnviada={resenasEnviadas.has(reserva.id_reserva)} verificandoResenas={verificandoResenas} />)}
                             </section>
                         )}
                     </>
@@ -206,12 +228,12 @@ export default function MisReservas() {
     );
 }
 
-function ReservaCard({ reserva, onCancelar, cancelando, resenaAbierta, onAbrirResena, onCerrarResena, calificacionSel, setCalificacionSel, comentarioResena, setComentarioResena, onEnviarResena, enviandoResena, resenaYaEnviada }: {
+function ReservaCard({ reserva, onCancelar, cancelando, resenaAbierta, onAbrirResena, onCerrarResena, calificacionSel, setCalificacionSel, comentarioResena, setComentarioResena, onEnviarResena, enviandoResena, resenaYaEnviada, verificandoResenas }: {
     reserva: Reserva; onCancelar: () => void; cancelando: boolean;
     resenaAbierta: boolean; onAbrirResena: () => void; onCerrarResena: () => void;
     calificacionSel: number; setCalificacionSel: (n: number) => void;
     comentarioResena: string; setComentarioResena: (s: string) => void;
-    onEnviarResena: () => void; enviandoResena: boolean; resenaYaEnviada: boolean;
+    onEnviarResena: () => void; enviandoResena: boolean; resenaYaEnviada: boolean; verificandoResenas: boolean;
 }) {
     const [expandida, setExpandida] = useState(false);
     const [qrVisible, setQrVisible] = useState(false);
@@ -286,16 +308,19 @@ function ReservaCard({ reserva, onCancelar, cancelando, resenaAbierta, onAbrirRe
                             )}
                         </div>
                     )}
-                    {esEntregada && !resenaYaEnviada && (
+                    {esEntregada && verificandoResenas && (
+                        <p className="text-xs text-slate-400 pt-2 border-t border-slate-100 dark:border-slate-700">Verificando reseña...</p>
+                    )}
+                    {esEntregada && !verificandoResenas && !resenaYaEnviada && (
                         <div className="pt-3 border-t border-slate-100 dark:border-slate-700">
                             {!resenaAbierta ? (
                                 <button onClick={e => { e.stopPropagation(); onAbrirResena(); }} className="flex items-center gap-2 text-sm font-medium text-amber-600 hover:text-amber-700 transition-colors">
                                     <Star size={16} />
-                                    Dejar resena de la farmacia
+                                    Dejar reseña de la farmacia
                                 </button>
                             ) : (
                                 <div className="space-y-3" onClick={e => e.stopPropagation()}>
-                                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Como calificarias tu experiencia?</p>
+                                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Cómo calificarías tu experiencia?</p>
                                     <div className="flex gap-1">
                                         {[1, 2, 3, 4, 5].map(n => (
                                             <button key={n} onClick={() => setCalificacionSel(n)}>
@@ -306,15 +331,15 @@ function ReservaCard({ reserva, onCancelar, cancelando, resenaAbierta, onAbrirRe
                                     <textarea value={comentarioResena} onChange={e => setComentarioResena(e.target.value)} placeholder="Comentario opcional..." rows={2} className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400" />
                                     <div className="flex gap-2">
                                         <button onClick={onCerrarResena} className="flex-1 py-2 border border-slate-200 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300">Cancelar</button>
-                                        <button onClick={onEnviarResena} disabled={calificacionSel === 0 || enviandoResena} className="flex-1 py-2 bg-amber-500 text-white rounded-xl text-sm font-semibold hover:bg-amber-600 disabled:opacity-50">{enviandoResena ? "Enviando..." : "Enviar resena"}</button>
+                                        <button onClick={onEnviarResena} disabled={calificacionSel === 0 || enviandoResena} className="flex-1 py-2 bg-amber-500 text-white rounded-xl text-sm font-semibold hover:bg-amber-600 disabled:opacity-50">{enviandoResena ? "Enviando..." : "Enviar reseña"}</button>
                                     </div>
                                 </div>
                             )}
                         </div>
                     )}
-                    {resenaYaEnviada && (
+                    {resenaYaEnviada && !verificandoResenas && (
                         <div className="flex items-center gap-1.5 text-xs text-amber-600 pt-2 border-t border-slate-100 dark:border-slate-700">
-                            <Star size={13} className="fill-amber-400" />Ya dejaste tu resena. Gracias!
+                            <Star size={13} className="fill-amber-400" />Ya dejaste tu reseña. Gracias!
                         </div>
                     )}
                     {esPendiente && (

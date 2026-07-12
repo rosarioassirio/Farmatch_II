@@ -23,6 +23,13 @@ export default async function handler(req, res) {
 
         if (req.method === "GET") {
             const idFarmacia = req.query.id_farmacia;
+            const idReserva = req.query.id_reserva;
+
+            if (idReserva) {
+                const existente = await coleccion.findOne({ id_reserva: Number(idReserva) });
+                return res.status(200).json({ ya_reseniada: !!existente });
+            }
+
             if (!idFarmacia) return res.status(400).json({ error: "Falta id_farmacia" });
             const resenas = await coleccion.find({ id_farmacia: Number(idFarmacia) }).sort({ fecha: -1 }).toArray();
             const promedio = resenas.length > 0 ? resenas.reduce((t, r) => t + r.calificacion, 0) / resenas.length : null;
@@ -30,12 +37,19 @@ export default async function handler(req, res) {
         }
 
         if (req.method === "POST") {
-            const { id_farmacia, id_paciente, nombre_paciente, calificacion, comentario } = req.body;
+            const { id_farmacia, id_paciente, id_reserva, nombre_paciente, calificacion, comentario } = req.body;
             if (!id_farmacia || !id_paciente || !calificacion) return res.status(400).json({ error: "Faltan datos obligatorios" });
             if (calificacion < 1 || calificacion > 5) return res.status(400).json({ error: "La calificacion debe ser entre 1 y 5" });
+
+            if (id_reserva) {
+                const existente = await coleccion.findOne({ id_reserva: Number(id_reserva) });
+                if (existente) return res.status(409).json({ error: "Ya existe una resena para este pedido." });
+            }
+
             const nuevaResena = {
                 id_farmacia: Number(id_farmacia),
                 id_paciente: Number(id_paciente),
+                id_reserva: id_reserva ? Number(id_reserva) : null,
                 nombre_paciente: nombre_paciente || "Paciente",
                 calificacion: Number(calificacion),
                 comentario: comentario || "",

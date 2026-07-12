@@ -273,7 +273,7 @@ export default function DashboardFarmacia() {
 
             <main className="mx-auto max-w-5xl p-8">
                 <div className="mb-8 flex gap-3 flex-wrap">
-                    {[{ key: "pedidos", label: "Pedidos recibidos" }, { key: "estadisticas", label: "Estadisticas" }, { key: "stock", label: "Mi Stock" }, { key: "resenas", label: "Resenas" }].map((tab) => (
+                    {[{ key: "pedidos", label: "Pedidos recibidos" }, { key: "estadisticas", label: "Estadisticas" }, { key: "stock", label: "Mi Stock" }, { key: "resenas", label: "Reseñas" }].map((tab) => (
                         <button key={tab.key} onClick={() => setVista(tab.key as Vista)} className={`rounded-xl px-6 py-3 font-semibold transition ${vista === tab.key ? "bg-blue-600 text-white shadow-md shadow-blue-200" : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700"}`}>
                             {tab.label}
                             {tab.key === "stock" && stockBajos.length > 0 && <span className="ml-2 rounded-full bg-red-500 px-2 py-0.5 text-xs text-white">{stockBajos.length}</span>}
